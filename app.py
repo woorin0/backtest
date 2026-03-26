@@ -1,5 +1,6 @@
 import streamlit as st
 import os
+import datetime
 from dotenv import load_dotenv
 
 # 내부 모듈 임포트
@@ -35,9 +36,17 @@ with col1:
     engine = st.selectbox("백테스트 엔진", ["Backtrader", "Vectorbt"])
     
     st.markdown("---")
-    st.subheader("📅 데이터 기간")
-    timeframe = st.selectbox("타임프레임", ["1d", "1h", "15m", "5m", "1m"])
-    limit = st.number_input("데이터 갯수", min_value=100, max_value=5000, value=1000, step=100)
+    st.subheader("📅 타임프레임 및 기간 설정")
+    # 사용자가 직접 입력 가능하게 변경 (selectbox -> text_input)
+    timeframe = st.text_input("타임프레임 (예: 1d, 4h, 1h, 15m, 5m, 1m)", value="1h")
+    
+    col_d1, col_d2 = st.columns(2)
+    with col_d1:
+        start_date = st.date_input("시작일", value=datetime.date.today() - datetime.timedelta(days=30))
+    with col_d2:
+        end_date = st.date_input("종료일", value=datetime.date.today())
+        
+    limit = st.number_input("1회 요청 최대 갯수", min_value=100, max_value=5000, value=1000, step=100)
     
     start_btn = st.button("🚀 백테스트 시작", use_container_width=True)
 
@@ -105,8 +114,8 @@ if start_btn:
     # 0~100% 게이지바
     prog_bar = st.progress(0, text="백테스트 준비 중...")
     
-    # 1. 과거 캔들 데이터 수집
-    data = fetch_candles(exchange, symbol, timeframe, limit, prog_bar)
+    # 1. 과거 캔들 데이터 구간 반복 연동 수집
+    data = fetch_candles(exchange, symbol, timeframe, start_date, end_date, limit, prog_bar)
     
     if data is not None and not data.empty:
         # 2. 백테스트 엔진 구동
