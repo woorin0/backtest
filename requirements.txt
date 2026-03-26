@@ -1,0 +1,8 @@
+streamlit==1.42.0
+ccxt
+pandas
+openpyxl
+requests
+backtrader
+vectorbt
+python-dotenv
