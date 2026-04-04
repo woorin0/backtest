@@ -9,13 +9,16 @@ def run_backtrader(code_str: str, data: pd.DataFrame, optuna_trial=None):
     
     # 1. 런타임 코드 실행 (보안 샌드박스 없음 - 개인 로컬 구동용)
     try:
-        exec(code_str, globals(), local_env)
+        # Optuna 변수를 globals 레벨로 넘겨야 클래스 정의 내부에서 인식 가능합니다.
+        exec_globals = globals().copy()
+        exec_globals.update(local_env)
+        exec(code_str, exec_globals)
         
         # 사용자가 직접 metrics를 반환한 경우 (새 템플릿 방식)
-        if 'metrics' in local_env and isinstance(local_env['metrics'], dict):
-            return True, local_env['metrics']
+        if 'metrics' in exec_globals and isinstance(exec_globals['metrics'], dict):
+            return True, exec_globals['metrics']
             
-        strategy_class = local_env.get('TestStrategy')
+        strategy_class = exec_globals.get('TestStrategy')
         if not strategy_class:
             return False, "전략 코드에 'TestStrategy' 이름의 클래스가 정의되지 않았습니다."
             

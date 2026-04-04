@@ -226,7 +226,7 @@ class TestStrategy(bt.Strategy):
         self.atr10 = bt.indicators.ATR(self.datas[0], period=10)
         self.atr_hl = bt.indicators.ATR(self.datas[0], period=self.p.bb_length if self.p.hl_price == 'BB' else self.p.hott_h_length)
         
-        vol_src = (self.datahigh - self.datalow) / bt.And(self.dataclose, bt.If(self.dataclose > 0, self.dataclose, 0.000001))
+        vol_src = (self.datahigh - self.datalow) / bt.If(self.dataclose > 0, self.dataclose, 0.000001)
         self.ma1 = bt.indicators.SMA(vol_src, period=self.p.ma1_length)
         self.ma2 = bt.indicators.EMA(self.dataclose, period=self.p.ma2_length)
         
