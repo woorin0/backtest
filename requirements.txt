@@ -1,6 +1,7 @@
 streamlit==1.42.0
 ccxt
 pandas
+pandas-ta
 openpyxl
 requests
 backtrader

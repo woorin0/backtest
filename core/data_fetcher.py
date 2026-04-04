@@ -27,7 +27,7 @@ def fetch_candles(exchange_id: str, symbol: str, timeframe: str, start_date, end
             try:
                 ohlcv = exchange.fetch_ohlcv(symbol, timeframe, since=since, limit=limit)
             except Exception as e:
-                st.warning(f"데이터 수신 지연 혹은 오류 발생: {e}")
+                print(f"데이터 수신 지연 혹은 오류 발생: {e}")
                 time.sleep(1)
                 continue
                 
@@ -78,5 +78,5 @@ def fetch_candles(exchange_id: str, symbol: str, timeframe: str, start_date, end
             
         return df
     except Exception as e:
-        st.error(f"데이터 수집 에러 발생: {e}")
+        print(f"데이터 수집 에러 발생: {e}")
         return None

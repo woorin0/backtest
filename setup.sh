@@ -11,5 +11,12 @@ sudo systemctl start redis-server
 pip install -r requirements.txt
 
 echo "✅ 환경 설정이 완료되었습니다."
-echo "▶️ 워커 실행: celery -A core.tasks worker --loglevel=info &"
-echo "▶️ 웹 실행: streamlit run app.py &"
+# 이전 프로세스 종료 (재실행 시 꼬임 방지)
+pkill -f celery
+pkill -f streamlit
+
+# 무중단 백그라운드 실행 (로그는 각각의 log 파일에 저장됨)
+nohup celery -A core.tasks worker --loglevel=info > celery_worker.log 2>&1 &
+nohup streamlit run app.py > streamlit_app.log 2>&1 &
+
+echo "▶️ 워커와 웹서버가 무중단 모드(nohup)로 실행되었습니다."

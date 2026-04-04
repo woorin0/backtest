@@ -5,12 +5,16 @@ import io
 
 def run_backtrader(code_str: str, data: pd.DataFrame, optuna_trial=None):
     """Backtrader를 이용한 동적 백테스트 실행"""
-    local_env = {'optuna_trial': optuna_trial} if optuna_trial else {}
+    local_env = {'optuna_trial': optuna_trial, 'data': data}
     
     # 1. 런타임 코드 실행 (보안 샌드박스 없음 - 개인 로컬 구동용)
     try:
         exec(code_str, globals(), local_env)
         
+        # 사용자가 직접 metrics를 반환한 경우 (새 템플릿 방식)
+        if 'metrics' in local_env and isinstance(local_env['metrics'], dict):
+            return True, local_env['metrics']
+            
         strategy_class = local_env.get('TestStrategy')
         if not strategy_class:
             return False, "전략 코드에 'TestStrategy' 이름의 클래스가 정의되지 않았습니다."
