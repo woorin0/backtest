@@ -6,3 +6,7 @@ requests
 backtrader
 vectorbt
 python-dotenv
+celery
+redis
+optuna
+SQLAlchemy

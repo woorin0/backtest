@@ -3,9 +3,9 @@ import pandas as pd
 import sys
 import io
 
-def run_backtrader(code_str: str, data: pd.DataFrame):
+def run_backtrader(code_str: str, data: pd.DataFrame, optuna_trial=None):
     """Backtrader를 이용한 동적 백테스트 실행"""
-    local_env = {}
+    local_env = {'optuna_trial': optuna_trial} if optuna_trial else {}
     
     # 1. 런타임 코드 실행 (보안 샌드박스 없음 - 개인 로컬 구동용)
     try:
@@ -64,10 +64,10 @@ def run_backtrader(code_str: str, data: pd.DataFrame):
     except Exception as e:
         return False, f"Backtrader 엔진 자체 에러: {str(e)}"
 
-def run_vectorbt(code_str: str, data: pd.DataFrame):
+def run_vectorbt(code_str: str, data: pd.DataFrame, optuna_trial=None):
     """Vectorbt를 이용한 동적 백테스트 실행"""
     # 전역 접근용으로 data 할당
-    local_env = {'data': data}
+    local_env = {'data': data, 'optuna_trial': optuna_trial}
     
     try:
         exec(code_str, globals(), local_env)
@@ -81,10 +81,10 @@ def run_vectorbt(code_str: str, data: pd.DataFrame):
     except Exception as e:
         return False, f"Vectorbt 엔진 파이프라인 에러: {str(e)}"
 
-def run_backtest(engine: str, code_str: str, data: pd.DataFrame):
+def run_backtest(engine: str, code_str: str, data: pd.DataFrame, optuna_trial=None):
     if engine.lower() == 'backtrader':
-        return run_backtrader(code_str, data)
+        return run_backtrader(code_str, data, optuna_trial)
     elif engine.lower() == 'vectorbt':
-        return run_vectorbt(code_str, data)
+        return run_vectorbt(code_str, data, optuna_trial)
     else:
         return False, "지원하지 않는 엔진입니다."

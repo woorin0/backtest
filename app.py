@@ -3,18 +3,19 @@ import os
 import datetime
 from dotenv import load_dotenv
 
-# 내부 모듈 임포트
-from core.data_fetcher import fetch_candles
-from core.engine_runner import run_backtest
-from core.notifier import send_discord_alert
-from utils.exporter import create_excel_buffer
+import time
+import optuna
+from optuna.storages import RDBStorage
+from celery.result import AsyncResult
+
+from core.tasks import run_optimization_task
 
 # 환경 변수 로드
 load_dotenv()
 
 st.set_page_config(page_title="Quant Backtest Dashboard", layout="wide")
 
-# CSS 커스텀 스타일 (간단한 색상 지정)
+# CSS 커스텀 스타일
 st.markdown("""
 <style>
 div.stButton > button:first-child {
@@ -25,7 +26,7 @@ div.stButton > button:first-child {
 </style>
 """, unsafe_allow_html=True)
 
-st.title("📈 웹 기반 퀀트 백테스트 대시보드")
+st.title("📈 웹 기반 퀀트 최적화 대시보드 (비동기 처리)")
 
 col1, col2 = st.columns([1, 2])
 
@@ -36,8 +37,7 @@ with col1:
     engine = st.selectbox("백테스트 엔진", ["Backtrader", "Vectorbt"])
     
     st.markdown("---")
-    st.subheader("📅 타임프레임 및 기간 설정")
-    # 사용자가 직접 입력 가능하게 변경 (selectbox -> text_input)
+    st.subheader("📅 타임프레임 및 최적화 설정")
     timeframe = st.text_input("타임프레임 (예: 1d, 4h, 1h, 15m, 5m, 1m)", value="1h")
     
     col_d1, col_d2 = st.columns(2)
@@ -47,21 +47,22 @@ with col1:
         end_date = st.date_input("종료일", value=datetime.date.today())
         
     limit = st.number_input("1회 요청 최대 갯수", min_value=100, max_value=5000, value=1000, step=100)
+    n_trials = st.number_input("Optuna 최적화 반복 탐색 횟수", min_value=10, max_value=10000, value=100, step=50)
     
-    start_btn = st.button("🚀 백테스트 시작", use_container_width=True)
+    start_btn = st.button("🚀 백테스트 최적화 시작", use_container_width=True)
 
 with col2:
     st.subheader("💻 전략 코드 입력")
     
-    # 템플릿 코드 분기
     if engine == "Backtrader":
         default_code = """# Backtrader 엔진용 전략 클래스 템플릿입니다.
 # 반드시 'TestStrategy'라는 이름의 클래스를 정의하고 bt.Strategy를 상속받아야 합니다.
+# 'optuna_trial' 객체가 백그라운드 워커에서 주입됩니다.
 import backtrader as bt
 
 class TestStrategy(bt.Strategy):
     params = (
-        ('sma_period', 15),
+        ('sma_period', optuna_trial.suggest_int('sma_period', 5, 50) if 'optuna_trial' in globals() and optuna_trial else 15),
     )
 
     def __init__(self):
@@ -78,15 +79,23 @@ class TestStrategy(bt.Strategy):
 """
     else:
         default_code = """# Vectorbt 엔진용 전략 스크립트 템플릿입니다.
-# 'data' 변수(Pandas DataFrame)가 런타임에 주입됩니다.
+# 'data' 변수와 'optuna_trial' 변수가 런타임에 주입됩니다.
 import vectorbt as vbt
 import pandas as pd
 
 close = data['Close']
 
+# Optuna 파라미터 최적화 (fast는 5~20 튜닝, slow는 30~100 사이 튜닝)
+if optuna_trial:
+    fast_period = optuna_trial.suggest_int('fast', 5, 20)
+    slow_period = optuna_trial.suggest_int('slow', 30, 100)
+else:
+    fast_period = 10
+    slow_period = 50
+
 # 이동평균 계산 및 신호 생성
-fast_ma = vbt.MA.run(close, 10, short_name='fast')
-slow_ma = vbt.MA.run(close, 50, short_name='slow')
+fast_ma = vbt.MA.run(close, fast_period, short_name='fast')
+slow_ma = vbt.MA.run(close, slow_period, short_name='slow')
 
 entries = fast_ma.ma_crossed_above(slow_ma)
 exits = fast_ma.ma_crossed_below(slow_ma)
@@ -94,7 +103,7 @@ exits = fast_ma.ma_crossed_below(slow_ma)
 # 포트폴리오 백테스트
 portfolio = vbt.Portfolio.from_signals(close, entries, exits, init_cash=10000)
 
-# 결과 메트릭 추출 (필수 변수: metrics)
+# 결과 메트릭 추출
 metrics = {
     "Total Return (%)": round(portfolio.total_return() * 100, 2) if hasattr(portfolio, 'total_return') else 0,
     "Win Rate (%)": round(portfolio.win_rate() * 100, 2) if hasattr(portfolio, 'win_rate') else 0,
@@ -107,62 +116,73 @@ metrics = {
 
 st.markdown("---")
 
-# 실행 및 결과 처리 플로우
+# 실행 및 결과 처리 플로우 (비동기 방식)
 if start_btn:
-    st.subheader("🔄 실행 진행 현황")
+    st.subheader("🔄 최적화 실행 진행 현황")
     
-    # 0~100% 게이지바
-    prog_bar = st.progress(0, text="백테스트 준비 중...")
+    # Celery Task Trigger
+    task = run_optimization_task.apply_async(kwargs={
+        'exchange': exchange,
+        'symbol': symbol,
+        'timeframe': timeframe,
+        'start_date': str(start_date),
+        'end_date': str(end_date),
+        'limit': limit,
+        'engine': engine,
+        'code_str': strategy_code,
+        'n_trials': n_trials
+    })
     
-    # 1. 과거 캔들 데이터 구간 반복 연동 수집
-    data = fetch_candles(exchange, symbol, timeframe, start_date, end_date, limit, prog_bar)
+    st.info(f"🚀 Celery 백그라운드 워커에 최적화 작업을 넘겼습니다. (Task ID: {task.id})")
     
-    if data is not None and not data.empty:
-        # 2. 백테스트 엔진 구동
-        with st.spinner(f"[{engine}] 백테스트 계산 중..."):
-            success, result_or_err = run_backtest(engine, strategy_code, data)
-            prog_bar.progress(90, text="백테스트 연산 완료, 결과 처리 중...")
+    status_placeholder = st.empty()
+    gauge_placeholder = st.empty()
+    
+    study_name = f"study_{task.id}"
+    storage = RDBStorage("sqlite:///optuna_study.db")
+    
+    with st.spinner("Celery 큐 대기 및 최적화 진행 중... 실시간 지표 폴링"):
+        while True:
+            # Task 상태 체크
+            if task.ready():
+                break
             
-            if success:
-                metrics = result_or_err
-                st.success("🎉 백테스트가 완료되었습니다!")
+            # SQLite Optuna Study DB 읽어서 진행상황 렌더링
+            try:
+                study = optuna.load_study(study_name=study_name, storage=storage)
+                trials = study.trials
+                completed = len([t for t in trials if t.state == optuna.trial.TrialState.COMPLETE])
                 
-                # 요약 결과 메트릭 생성
-                st.write("**요약 성과 지표**")
-                cols = st.columns(len(metrics))
-                for i, (k, v) in enumerate(metrics.items()):
-                    cols[i].metric(label=k, value=v)
+                # 시상 최고 수익률 추적
+                best_val = study.best_value if completed > 0 else 0
                 
-                # 데이터 프레임 렌더링
-                st.write("**최근 시세 기록 (10 rows)**")
-                st.dataframe(data.tail(10))
+                prog = min(int(completed / n_trials * 100), 100)
+                gauge_placeholder.progress(prog, text=f"완료 횟수: {completed} / {n_trials}")
+                status_placeholder.markdown(f"### 🔥 현재 찾아낸 최고 수익률: **{best_val:.2f}%**")
                 
-                # 3. 엑셀 변환 로직 연동
-                excel_buffer = create_excel_buffer(data, metrics)
-                
-                col_dl, col_wh = st.columns(2)
-                
-                # 다운로드 버튼
-                with col_dl:
-                    st.download_button(
-                        label="📥 엑셀 결과 다운로드 (.xlsx)",
-                        data=excel_buffer,
-                        file_name=f"Backtest_{exchange}_{symbol.replace('/','-')}_{engine}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
-                
-                # 4. 웹훅 전송
-                wh_success, wh_msg = send_discord_alert(metrics, engine, symbol)
-                with col_wh:
-                    if wh_success:
-                        st.info("🔔 디스코드 웹훅 알림 발송 성공")
-                    else:
-                        st.warning(f"🔕 웹훅 알림 발송 실패: {wh_msg}")
-                
-                prog_bar.progress(100, text="모든 작업이 무사히 완료되었습니다!")
-            else:
-                st.error(f"스크립트 에러: {result_or_err}")
-                prog_bar.empty()
+            except Exception as e:
+                status_placeholder.markdown("Optuna Study 초기화 대기 중...")
+            
+            time.sleep(1.5)
+            
+    # 최종 결과 반환
+    final_res = task.get()
+    
+    if isinstance(final_res, dict) and final_res.get('status') == 'SUCCESS':
+        gauge_placeholder.progress(100, text="최적화 완전 종료")
+        st.success(f"🎉 완료되었습니다! 최종 최고 수익률: **{final_res.get('best_value'):.2f}%**")
+        st.info("🔔 디스코드 웹훅으로 최적화 완료 알림이 전송되었습니다. (Top 30 상세 상세 내역은 아래 엑셀에 포함)")
+        
+        # 엑셀 다운로드 버튼 활성화
+        excel_path = final_res.get('excel_file')
+        if excel_path and os.path.exists(excel_path):
+            with open(excel_path, "rb") as f:
+                st.download_button(
+                    label="📥 최고 성과 1위 상세 데이터 및 Top 30 랭킹 엑셀 다운로드 (.xlsx)",
+                    data=f,
+                    file_name=f"Best_Backtest_{exchange}_{symbol.replace('/','-')}_{engine}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
     else:
-        st.error("데이터 다운로드에 실패했습니다. (거래소 또는 심볼 이름 확인)")
-        prog_bar.empty()
+        gauge_placeholder.empty()
+        st.error(f"작업 실패 또는 에러 발생: {final_res}")
