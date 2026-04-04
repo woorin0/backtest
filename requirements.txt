@@ -1,7 +1,6 @@
-streamlit==1.42.0
+streamlit
 ccxt
 pandas
-git+https://github.com/twopirllc/pandas-ta.git@development
 openpyxl
 requests
 backtrader
