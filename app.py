@@ -1,6 +1,7 @@
 import streamlit as st
 import os
 import datetime
+import json
 from dotenv import load_dotenv
 
 import time
@@ -8,7 +9,7 @@ import optuna
 from optuna.storages import RDBStorage
 from celery.result import AsyncResult
 
-from core.tasks import run_optimization_task
+from core.tasks import run_optimization_task, celery_app
 
 # 환경 변수 로드
 load_dotenv()
@@ -459,8 +460,25 @@ metrics = {
 
 st.markdown("---")
 
+CACHE_FILE = ".active_task.json"
+active_task = None
+
+# 캐시 파일 감지 및 로드 (새로고침 복구용)
+if os.path.exists(CACHE_FILE):
+    try:
+        with open(CACHE_FILE, "r") as f:
+            meta = json.load(f)
+        task_check = AsyncResult(meta["task_id"], app=celery_app)
+        if not task_check.ready():
+            active_task = meta
+            st.warning("🔄 접속 종료 또는 새로고침 되기 전 수신된 백그라운드 최적화 작업을 자동 복구(Re-attach)하여 추적합니다.")
+        else:
+            os.remove(CACHE_FILE)
+    except Exception:
+        pass
+
 # 실행 및 결과 처리 플로우 (비동기 방식)
-if start_btn:
+if start_btn and not active_task:
     st.subheader("🔄 최적화 실행 진행 현황")
     
     # Celery Task Trigger
@@ -476,7 +494,28 @@ if start_btn:
         'n_trials': n_trials
     })
     
-    st.info(f"🚀 Celery 백그라운드 워커에 최적화 작업을 넘겼습니다. (Task ID: {task.id})")
+    # 프로세스 캐시 저장
+    active_task = {
+        "task_id": task.id, 
+        "n_trials": n_trials,
+        "exchange": exchange,
+        "symbol": symbol,
+        "engine": engine
+    }
+    try:
+        with open(CACHE_FILE, "w") as f:
+            json.dump(active_task, f)
+    except Exception:
+        pass
+
+if active_task:
+    task = AsyncResult(active_task["task_id"], app=celery_app)
+    n_trials_meta = active_task["n_trials"]
+    ex_meta = active_task.get("exchange", "Unknown")
+    sym_meta = active_task.get("symbol", "BTC").replace('/', '-')
+    engine_meta = active_task.get("engine", "Engine")
+    
+    st.info(f"🚀 Celery 백그라운드 워커 렌더링 중... (Task ID: {task.id})")
     
     status_placeholder = st.empty()
     gauge_placeholder = st.empty()
@@ -484,35 +523,31 @@ if start_btn:
     study_name = f"study_{task.id}"
     storage = RDBStorage("sqlite:///optuna_study.db")
     
-    with st.spinner("Celery 큐 대기 및 최적화 진행 중... 실시간 지표 폴링"):
+    with st.spinner("Celery 큐 대기 및 최적화 진행 중... (새로고침 하셔도 됩니다)"):
         while True:
-            # Task 상태 체크
             if task.ready():
                 break
             
-            # SQLite Optuna Study DB 읽어서 진행상황 렌더링
+            # SQLite Optuna 진행률 폴링
             try:
-                # DB Locking 에러를 줄이기 위해 로드 시점을 분리
                 study = optuna.load_study(study_name=study_name, storage=storage)
                 trials = study.trials
                 completed = len([t for t in trials if t.state == optuna.trial.TrialState.COMPLETE])
                 
-                # 안전한 best_value 추출
                 best_val = 0.0
                 if completed > 0:
                     try:
                         best_val = study.best_value
                     except ValueError:
-                        pass # 아직 정상적인 결과값이 없을 때 무시
+                        pass
                 
-                prog = min(int(completed / n_trials * 100), 100)
-                gauge_placeholder.progress(prog, text=f"완료 횟수: {completed} / {n_trials}")
+                prog = min(int(completed / n_trials_meta * 100), 100)
+                gauge_placeholder.progress(prog, text=f"완료 횟수: {completed} / {n_trials_meta}")
                 status_placeholder.markdown(f"### 🔥 현재 찾아낸 최고 수익률: **{best_val:.2f}%**")
                 
             except Exception as e:
                 status_placeholder.markdown("⏳ Optuna 데이터베이스 초기화 및 동기화 대기 중...")
             
-            # DB 부하를 줄이기 위해 폴링 주기 연장 (1.5초 -> 3초)
             time.sleep(3.0)
             
     # 최종 결과 반환
@@ -521,19 +556,26 @@ if start_btn:
     except Exception as e:
         final_res = {"status": "FAILED", "reason": f"Celery 작업 중단 및 예외 발생: {str(e)}"}
     
+    # 작업이 끝났으므로 캐시 삭제
+    if os.path.exists(CACHE_FILE):
+        try:
+            os.remove(CACHE_FILE)
+        except Exception:
+            pass
+            
     if isinstance(final_res, dict) and final_res.get('status') == 'SUCCESS':
         gauge_placeholder.progress(100, text="최적화 완전 종료")
         st.success(f"🎉 완료되었습니다! 최종 최고 수익률: **{final_res.get('best_value'):.2f}%**")
-        st.info("🔔 디스코드 웹훅으로 최적화 완료 알림이 전송되었습니다. (Top 30 상세 내역은 아래 엑셀에 포함)")
+        st.info("🔔 디스코드 웹훅으로 최적화 완료 알림이 전송되었습니다.")
         
-        # 엑셀 다운로드 버튼 활성화
+        # 엑셀 다운로드
         excel_path = final_res.get('excel_file')
         if excel_path and os.path.exists(excel_path):
             with open(excel_path, "rb") as f:
                 st.download_button(
-                    label="📥 최고 성과 1위 상세 데이터 및 Top 30 랭킹 엑셀 다운로드 (.xlsx)",
+                    label="📥 최고 성과 추출 엑셀 다운로드 (.xlsx)",
                     data=f,
-                    file_name=f"Best_Backtest_{exchange}_{symbol.replace('/','-')}_{engine}.xlsx",
+                    file_name=f"Best_Backtest_{ex_meta}_{sym_meta}_{engine_meta}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
     else:
