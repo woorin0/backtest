@@ -23,12 +23,17 @@ def fetch_candles(exchange_id: str, symbol: str, timeframe: str, start_date, end
         if progress_bar:
             progress_bar.progress(20, text=f"{exchange_id}에서 {symbol} 캔들 데이터 페이지네이션 수신 시작...")
             
+        retry_count = 0
         while since < end_timestamp:
             try:
                 ohlcv = exchange.fetch_ohlcv(symbol, timeframe, since=since, limit=limit)
             except Exception as e:
                 print(f"데이터 수신 지연 혹은 오류 발생: {e}")
-                time.sleep(1)
+                time.sleep(3)
+                retry_count += 1
+                if retry_count > 3:
+                    print("최대 재시도 횟수 초과. 다운로드 중단.")
+                    break
                 continue
                 
             if not ohlcv:
