@@ -43,9 +43,15 @@ def run_optimization_task(self, exchange: str, symbol: str, timeframe: str, star
     # 옵튜나 최적화 진행 서치
     study.optimize(objective, n_trials=n_trials)
     
-    # 완료 후 Top 30 결과 추출
+    # 완료 후 Top 30 결과 추출 (승률 60% 이상 & MDD 30% 이하 필터링)
     trials = study.trials
-    complete_trials = [t for t in trials if t.state == optuna.trial.TrialState.COMPLETE]
+    complete_trials = []
+    for t in trials:
+        if t.state == optuna.trial.TrialState.COMPLETE:
+            wr = t.user_attrs.get('Win Rate (%)', 0)
+            mdd = t.user_attrs.get('MDD (%)', 100)
+            if wr >= 60.0 and mdd <= 30.0:
+                complete_trials.append(t)
     complete_trials.sort(key=lambda t: t.value if t.value is not None else -9999, reverse=True)
     
     top_30 = complete_trials[:30]
