@@ -31,8 +31,11 @@ def run_optimization_task(self, exchange: str, symbol: str, timeframe: str, star
     def objective(trial):
         success, metrics_or_err = run_backtest(engine, code_str, data, optuna_trial=trial)
         if success and isinstance(metrics_or_err, dict):
-            # 성과와 승률 등을 기록 (Total Return을 최적화 대상으로 사용)
+            # 성과와 기타 메트릭을 기록
             trial.set_user_attr('Win Rate (%)', metrics_or_err.get('Win Rate (%)', 0.0))
+            trial.set_user_attr('MDD (%)', metrics_or_err.get('MDD (%)', 0.0))
+            trial.set_user_attr('Total Trades', metrics_or_err.get('Total Trades', 0))
+            trial.set_user_attr('Total Profit', metrics_or_err.get('Total Profit', 0.0))
             return float(metrics_or_err.get("Total Return (%)", -999.0))
         else:
             raise optuna.TrialPruned()
@@ -51,6 +54,9 @@ def run_optimization_task(self, exchange: str, symbol: str, timeframe: str, star
         top_configs.append({
             "Total Return (%)": t.value,
             "Win Rate (%)": t.user_attrs.get('Win Rate (%)', 0),
+            "MDD (%)": t.user_attrs.get('MDD (%)', 0),
+            "Total Trades": t.user_attrs.get('Total Trades', 0),
+            "Total Profit": round(t.user_attrs.get('Total Profit', 0.0), 2),
             "params": t.params
         })
         

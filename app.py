@@ -180,66 +180,55 @@ class BBCustom(bt.Indicator):
 # ==========================================
 class TestStrategy(bt.Strategy):
     params = (
-        # 1. Date Range
         ('use_date_range', False),
         ('start_date', datetime.datetime(1900, 1, 1)),
         ('end_date', datetime.datetime(2050, 1, 1)),
         
-        # 2. Basic Conditions
-        ('entry_type', 'both'),      # 'both', 'HighLong', 'LowLong'
-        ('hl_price', 'H/L OTT'),     # 'BB', 'H/L OTT', 'H/L+BB', 'MAX', 'MIN'
-        ('open_at_hl', 'limits'),    # 'limits', 'close'
-        ('open_at_ll', 'limits'),    
-        ('exit_at_hl', 'close'),     # 'limits', 'close'
-        ('exit_at_ll', 'limits'),    
-        ('hl_tp_price', 'ATR'),      # 'Fixed', 'ATR', 'both'
-        ('ll_tp_price', 'Fixed'),    
-        ('hl_sl_price', 'ATR'),      
-        ('ll_sl_price', 'Fixed'),    
-        ('tr_hl', True),             
-        ('p_ll', True),              # LL Pyramiding On/Off
+        ('entry_type', optuna_trial.suggest_categorical('entry_type', ['both', 'HighLong', 'LowLong']) if 'optuna_trial' in globals() and optuna_trial else 'both'),
+        ('hl_price', optuna_trial.suggest_categorical('hl_price', ['BB', 'H/L OTT', 'H/L+BB', 'MAX', 'MIN']) if 'optuna_trial' in globals() and optuna_trial else 'H/L OTT'),
+        ('open_at_hl', optuna_trial.suggest_categorical('open_at_hl', ['limits', 'close']) if 'optuna_trial' in globals() and optuna_trial else 'limits'),
+        ('open_at_ll', optuna_trial.suggest_categorical('open_at_ll', ['limits', 'close']) if 'optuna_trial' in globals() and optuna_trial else 'limits'),
+        ('exit_at_hl', optuna_trial.suggest_categorical('exit_at_hl', ['limits', 'close']) if 'optuna_trial' in globals() and optuna_trial else 'close'),
+        ('exit_at_ll', optuna_trial.suggest_categorical('exit_at_ll', ['limits', 'close']) if 'optuna_trial' in globals() and optuna_trial else 'limits'),
+        ('hl_tp_price', optuna_trial.suggest_categorical('hl_tp_price', ['Fixed', 'ATR', 'both']) if 'optuna_trial' in globals() and optuna_trial else 'ATR'),
+        ('ll_tp_price', optuna_trial.suggest_categorical('ll_tp_price', ['Fixed', 'ATR', 'both']) if 'optuna_trial' in globals() and optuna_trial else 'Fixed'),
+        ('hl_sl_price', optuna_trial.suggest_categorical('hl_sl_price', ['Fixed', 'ATR', 'both']) if 'optuna_trial' in globals() and optuna_trial else 'ATR'),
+        ('ll_sl_price', optuna_trial.suggest_categorical('ll_sl_price', ['Fixed', 'ATR', 'both']) if 'optuna_trial' in globals() and optuna_trial else 'Fixed'),
+        ('tr_hl', optuna_trial.suggest_categorical('tr_hl', [True, False]) if 'optuna_trial' in globals() and optuna_trial else True),
+        ('p_ll', optuna_trial.suggest_categorical('p_ll', [True, False]) if 'optuna_trial' in globals() and optuna_trial else True),
         
-        # 3. LL Moving Average
-        ('ll_volatility_filter', False),
-        ('ma1_length', 20),
-        ('ll_mult', 1.5),
-        ('ma2_length', 3),
+        ('ll_volatility_filter', optuna_trial.suggest_categorical('ll_volatility_filter', [True, False]) if 'optuna_trial' in globals() and optuna_trial else False),
+        ('ma1_length', optuna_trial.suggest_int('ma1_length', 10, 50) if 'optuna_trial' in globals() and optuna_trial else 20),
+        ('ll_mult', optuna_trial.suggest_float('ll_mult', 1.0, 3.0) if 'optuna_trial' in globals() and optuna_trial else 1.5),
+        ('ma2_length', optuna_trial.suggest_int('ma2_length', 2, 10) if 'optuna_trial' in globals() and optuna_trial else 3),
         
-        # 4. HL Bollinger Bands
-        ('bb_length', 20),
-        ('bb_dev', 2.0),
-        ('bb_min_width', 3.0),
-        ('bb_diff', False),
-        ('bb_diff_perc', 2.0),
+        ('bb_length', optuna_trial.suggest_int('bb_length', 10, 50) if 'optuna_trial' in globals() and optuna_trial else 20),
+        ('bb_dev', optuna_trial.suggest_float('bb_dev', 1.0, 3.0) if 'optuna_trial' in globals() and optuna_trial else 2.0),
+        ('bb_min_width', optuna_trial.suggest_float('bb_min_width', 1.0, 5.0) if 'optuna_trial' in globals() and optuna_trial else 3.0),
+        ('bb_diff', optuna_trial.suggest_categorical('bb_diff', [True, False]) if 'optuna_trial' in globals() and optuna_trial else False),
+        ('bb_diff_perc', optuna_trial.suggest_float('bb_diff_perc', 0.5, 5.0) if 'optuna_trial' in globals() and optuna_trial else 2.0),
         
-        # 5. H/L OTT
-        ('hott_length', optuna_trial.suggest_int('hott_length', 2, 5) if 'optuna_trial' in globals() and optuna_trial else 2),
-        ('hott_percent', optuna_trial.suggest_float('hott_percent', 0.1, 1.5) if 'optuna_trial' in globals() and optuna_trial else 0.6),
+        ('hott_length', optuna_trial.suggest_int('hott_length', 2, 10) if 'optuna_trial' in globals() and optuna_trial else 2),
+        ('hott_percent', optuna_trial.suggest_float('hott_percent', 0.1, 2.0) if 'optuna_trial' in globals() and optuna_trial else 0.6),
         ('hott_h_length', optuna_trial.suggest_int('hott_h_length', 50, 150) if 'optuna_trial' in globals() and optuna_trial else 100),
         
-        # 6. H/L+BB
-        ('hl_bb_weight', 0.5),
+        ('hl_bb_weight', optuna_trial.suggest_float('hl_bb_weight', 0.1, 0.9) if 'optuna_trial' in globals() and optuna_trial else 0.5),
         
-        # 7. Percentage
-        ('entry_hl_per', 0.0),
-        ('entry_ll_per', 0.06),
-        ('tp_hl_per', optuna_trial.suggest_float('tp_hl_per', 0.005, 0.05) if 'optuna_trial' in globals() and optuna_trial else 0.015),
-        ('sl_hl_per', optuna_trial.suggest_float('sl_hl_per', 0.01, 0.05) if 'optuna_trial' in globals() and optuna_trial else 0.02),
-        ('tp_ll_per', 0.015),
-        ('sl_ll_per', 0.015),
+        ('entry_hl_per', optuna_trial.suggest_float('entry_hl_per', -0.05, 0.05) if 'optuna_trial' in globals() and optuna_trial else 0.0),
+        ('entry_ll_per', optuna_trial.suggest_float('entry_ll_per', 0.02, 0.15) if 'optuna_trial' in globals() and optuna_trial else 0.06),
+        ('tp_hl_per', optuna_trial.suggest_float('tp_hl_per', 0.005, 0.1) if 'optuna_trial' in globals() and optuna_trial else 0.015),
+        ('sl_hl_per', optuna_trial.suggest_float('sl_hl_per', 0.01, 0.1) if 'optuna_trial' in globals() and optuna_trial else 0.02),
+        ('tp_ll_per', optuna_trial.suggest_float('tp_ll_per', 0.01, 0.1) if 'optuna_trial' in globals() and optuna_trial else 0.015),
+        ('sl_ll_per', optuna_trial.suggest_float('sl_ll_per', 0.01, 0.1) if 'optuna_trial' in globals() and optuna_trial else 0.015),
         ('stop0_ll_per', 0.9999), 
         
-        # 8. ATR
-        ('atr_mul0', 0.0),
-        ('hl_tp_atr_mul', 2.0),
-        ('ll_tp_atr_mul', 2.0),
-        ('hl_sl_atr_mul', 4.0),
-        ('ll_sl_atr_mul', 4.0),
+        ('atr_mul0', optuna_trial.suggest_float('atr_mul0', 0.0, 2.0) if 'optuna_trial' in globals() and optuna_trial else 0.0),
+        ('hl_tp_atr_mul', optuna_trial.suggest_float('hl_tp_atr_mul', 1.0, 5.0) if 'optuna_trial' in globals() and optuna_trial else 2.0),
+        ('ll_tp_atr_mul', optuna_trial.suggest_float('ll_tp_atr_mul', 1.0, 5.0) if 'optuna_trial' in globals() and optuna_trial else 2.0),
+        ('hl_sl_atr_mul', optuna_trial.suggest_float('hl_sl_atr_mul', 1.0, 5.0) if 'optuna_trial' in globals() and optuna_trial else 4.0),
+        ('ll_sl_atr_mul', optuna_trial.suggest_float('ll_sl_atr_mul', 1.0, 5.0) if 'optuna_trial' in globals() and optuna_trial else 4.0),
         
-        # 9. TR
-        ('tr_ma_length', 100),
-        
-        # 10. Size / Installment
+        ('tr_ma_length', optuna_trial.suggest_int('tr_ma_length', 50, 200) if 'optuna_trial' in globals() and optuna_trial else 100),
         ('installment', 1),
     )
 
@@ -438,12 +427,41 @@ if 'data' in globals():
     cerebro.broker.setcommission(commission=0.0008)
     cerebro.broker.set_slippage_perc(0.0003)
 
+    cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name="trades")
+    cerebro.addanalyzer(bt.analyzers.DrawDown, _name="drawdown")
+
     initial_value = cerebro.broker.getvalue()
-    cerebro.run()
+    results = cerebro.run()
     final_value = cerebro.broker.getvalue()
+    
+    total_prof = final_value - initial_value
+    ret_pct = round((total_prof / initial_value) * 100, 2)
+    win_rate = 0.0
+    mdd = 0.0
+    total_tr = 0
+    
+    if results:
+        strat = results[0]
+        try:
+            trade_info = strat.analyzers.trades.get_analysis()
+            dd_info = strat.analyzers.drawdown.get_analysis()
+            
+            total_tr = trade_info.total.total if 'total' in trade_info else 0
+            if total_tr > 0 and 'won' in trade_info:
+                won_tr = trade_info.won.total
+                win_rate = round((won_tr / total_tr) * 100, 2)
+            
+            if 'max' in dd_info and 'drawdown' in dd_info.max:
+                mdd = round(dd_info.max.drawdown, 2)
+        except Exception:
+            pass
 
     metrics = {
-        "Total Return (%)": round(((final_value - initial_value) / initial_value) * 100, 2)
+        "Total Return (%)": ret_pct,
+        "Total Profit": round(total_prof, 2),
+        "Win Rate (%)": win_rate,
+        "MDD (%)": mdd,
+        "Total Trades": total_tr
     }
 """
     else:
