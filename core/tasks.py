@@ -3,7 +3,11 @@ import time
 import pandas as pd
 from celery import Celery
 import optuna
-from optuna.storages import RDBStorage
+from optuna.storages import JournalStorage
+try:
+    from optuna.storages import JournalRedisStorage
+except ImportError:
+    from optuna_integration.storages import JournalRedisStorage
 from core.data_fetcher import fetch_candles
 from core.engine_runner import run_backtest
 from core.notifier import send_discord_alert
@@ -24,7 +28,10 @@ def run_optimization_task(self, exchange: str, symbol: str, timeframe: str, star
         return {"error": "데이터 수집 실패"}
 
     study_name = f"study_{self.request.id}"
-    storage = RDBStorage("sqlite:///optuna_study.db")
+    
+    # SQLite 락(Lock) 병목을 방지하기 위해 Celery가 쓰는 기존 Redis 서버를 Optuna 인메모리 스토리지로 재활용(db=1)
+    redis_url = "redis://localhost:6379/1"
+    storage = JournalStorage(JournalRedisStorage(redis_url))
     
     study = optuna.create_study(study_name=study_name, storage=storage, direction="maximize", load_if_exists=True)
     
