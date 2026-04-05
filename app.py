@@ -184,8 +184,8 @@ class TestStrategy(bt.Strategy):
         ('start_date', datetime.datetime(1900, 1, 1)),
         ('end_date', datetime.datetime(2050, 1, 1)),
         
-        ('entry_type', optuna_trial.suggest_categorical('entry_type', ['both', 'HighLong', 'LowLong']) if 'optuna_trial' in globals() and optuna_trial else 'both'),
-        ('hl_price', optuna_trial.suggest_categorical('hl_price', ['BB', 'H/L OTT', 'H/L+BB', 'MAX', 'MIN']) if 'optuna_trial' in globals() and optuna_trial else 'H/L OTT'),
+        ('entry_type', 'both'),
+        ('hl_price', optuna_trial.suggest_categorical('hl_price', ['BB', 'H/L OTT', 'H/L+BB', 'MAX']) if 'optuna_trial' in globals() and optuna_trial else 'H/L OTT'),
         ('open_at_hl', optuna_trial.suggest_categorical('open_at_hl', ['limits', 'close']) if 'optuna_trial' in globals() and optuna_trial else 'limits'),
         ('open_at_ll', optuna_trial.suggest_categorical('open_at_ll', ['limits', 'close']) if 'optuna_trial' in globals() and optuna_trial else 'limits'),
         ('exit_at_hl', optuna_trial.suggest_categorical('exit_at_hl', ['limits', 'close']) if 'optuna_trial' in globals() and optuna_trial else 'close'),
