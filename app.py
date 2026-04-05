@@ -36,6 +36,31 @@ if not st.session_state["logged_in"]:
     st.stop()
 # -----------------------------------------------------------------
 
+with st.sidebar:
+    st.header("📥 과거 백테스트 결과")
+    st.info("이전에 완료된 백테스트 엑셀을 다운로드할 수 있습니다.")
+    
+    if not os.path.exists("results"):
+        os.makedirs("results", exist_ok=True)
+        
+    import glob
+    excel_files = glob.glob("results/*.xlsx")
+    if not excel_files:
+        st.write("아직 저장된 결과 파일이 없습니다.")
+    else:
+        excel_files.sort(key=os.path.getmtime, reverse=True)
+        for i, fpath in enumerate(excel_files[:15]): # 최신 15개까지만 노출
+            fname = os.path.basename(fpath)
+            disp_name = fname.replace("Best_Backtest_", "").replace(".xlsx", "")
+            with open(fpath, "rb") as ext_file:
+                st.download_button(
+                    label=f"📊 {disp_name}",
+                    data=ext_file,
+                    file_name=fname,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key=f"dl_history_{i}"
+                )
+
 # CSS 커스텀 스타일
 st.markdown("""
 <style>
