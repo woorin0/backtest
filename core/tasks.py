@@ -19,26 +19,21 @@ celery_app = Celery(
     backend='redis://localhost:6379/0'
 )
 
+from celery import chord
+
 @celery_app.task(bind=True)
-def run_optimization_task(self, exchange: str, symbol: str, timeframe: str, start_date: str, end_date: str, limit: int, engine: str, code_str: str, n_trials: int = 100):
-    # 1. 과거 캔들 데이터 수집
+def run_optuna_worker(self, study_name: str, exchange: str, symbol: str, timeframe: str, start_date: str, end_date: str, limit: int, engine: str, code_str: str, n_trials: int):
     data = fetch_candles(exchange, symbol, timeframe, start_date, end_date, limit, progress_bar=None)
-    
     if data is None or data.empty:
         return {"error": "데이터 수집 실패"}
 
-    study_name = f"study_{self.request.id}"
-    
-    # SQLite 락(Lock) 병목을 방지하기 위해 Celery가 쓰는 기존 Redis 서버를 Optuna 인메모리 스토리지로 재활용(db=1)
     redis_url = "redis://localhost:6379/1"
     storage = JournalStorage(JournalRedisStorage(redis_url))
-    
     study = optuna.create_study(study_name=study_name, storage=storage, direction="maximize", load_if_exists=True)
     
     def objective(trial):
         success, metrics_or_err = run_backtest(engine, code_str, data, optuna_trial=trial)
         if success and isinstance(metrics_or_err, dict):
-            # 성과와 기타 메트릭을 기록
             trial.set_user_attr('Win Rate (%)', metrics_or_err.get('Win Rate (%)', 0.0))
             trial.set_user_attr('MDD (%)', metrics_or_err.get('MDD (%)', 0.0))
             trial.set_user_attr('Total Trades', metrics_or_err.get('Total Trades', 0))
@@ -47,10 +42,21 @@ def run_optimization_task(self, exchange: str, symbol: str, timeframe: str, star
         else:
             raise optuna.TrialPruned()
 
-    # 옵튜나 최적화 진행 서치
     study.optimize(objective, n_trials=n_trials)
+    return {"status": "worker_done", "worker_id": self.request.id, "n_trials": n_trials}
+
+
+@celery_app.task(bind=True)
+def finalize_optuna_study(self, worker_results, study_name: str, exchange: str, symbol: str, timeframe: str, start_date: str, end_date: str, limit: int, engine: str):
+    # worker_results는 [결과1, 결과2, 결과3, 결과4] 리스트로 들어옴
     
-    # 완료 후 Top 30 결과 추출 (승률 60% 이상 & MDD 30% 이하 필터링)
+    # 엑셀 생성을 위한 데이터 로드
+    data = fetch_candles(exchange, symbol, timeframe, start_date, end_date, limit, progress_bar=None)
+    
+    redis_url = "redis://localhost:6379/1"
+    storage = JournalStorage(JournalRedisStorage(redis_url))
+    study = optuna.load_study(study_name=study_name, storage=storage)
+    
     trials = study.trials
     complete_trials = []
     for t in trials:
@@ -75,12 +81,9 @@ def run_optimization_task(self, exchange: str, symbol: str, timeframe: str, star
         
     best_trial = complete_trials[0] if complete_trials else None
     
-    # 디스코드 알림 (완료 알림만 전송)
     if best_trial:
         send_discord_alert(study_name, best_trial.value, engine, symbol)
-    
-    # Best 1 결과에 대해 엑셀 기록 후 results 폴더에 저장
-    if best_trial:
+        
         best_metrics = {
             "Total Return (%)": best_trial.value, 
             "Win Rate (%)": best_trial.user_attrs.get('Win Rate (%)', 0), 
@@ -95,4 +98,4 @@ def run_optimization_task(self, exchange: str, symbol: str, timeframe: str, star
             
         return {"status": "SUCCESS", "study_name": study_name, "best_value": best_trial.value, "excel_file": file_path}
     
-    return {"status": "FAILED", "reason": "완료된 Trial이 없습니다."}
+    return {"status": "FAILED", "reason": "조건(승률60/MDD30)에 부합하는 완료된 Trial이 없습니다."}

@@ -13,7 +13,8 @@ except ImportError:
     from optuna_integration.storages import JournalRedisStorage
 from celery.result import AsyncResult
 
-from core.tasks import run_optimization_task, celery_app
+from celery import chord
+from core.tasks import run_optuna_worker, finalize_optuna_study, celery_app
 
 # 환경 변수 로드
 load_dotenv()
@@ -614,22 +615,49 @@ if os.path.exists(CACHE_FILE):
 if start_btn and not active_task:
     st.subheader("🔄 최적화 실행 진행 현황")
     
-    # Celery Task Trigger
-    task = run_optimization_task.apply_async(kwargs={
-        'exchange': exchange,
-        'symbol': symbol,
-        'timeframe': timeframe,
-        'start_date': str(start_date),
-        'end_date': str(end_date),
-        'limit': limit,
-        'engine': engine,
-        'code_str': strategy_code,
-        'n_trials': n_trials
-    })
+    study_id = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+    study_name = f"study_{study_id}"
+    
+    threads = 4
+    trials_per_worker = n_trials // threads
+    remainder = n_trials % threads
+    
+    header_tasks = []
+    for i in range(threads):
+        worker_trials = trials_per_worker + (remainder if i == 0 else 0)
+        header_tasks.append(
+            run_optuna_worker.s(
+                study_name=study_name,
+                exchange=exchange,
+                symbol=symbol,
+                timeframe=timeframe,
+                start_date=str(start_date),
+                end_date=str(end_date),
+                limit=limit,
+                engine=engine,
+                code_str=strategy_code,
+                n_trials=worker_trials
+            )
+        )
+        
+    callback = finalize_optuna_study.s(
+        study_name=study_name,
+        exchange=exchange,
+        symbol=symbol,
+        timeframe=timeframe,
+        start_date=str(start_date),
+        end_date=str(end_date),
+        limit=limit,
+        engine=engine
+    )
+    
+    # Celery Chord 맵리듀스 발동! (4워커 일제 사격)
+    task = chord(header_tasks)(callback)
     
     # 프로세스 캐시 저장
     active_task = {
         "task_id": task.id, 
+        "study_name": study_name,
         "n_trials": n_trials,
         "exchange": exchange,
         "symbol": symbol,
@@ -653,7 +681,7 @@ if active_task:
     status_placeholder = st.empty()
     gauge_placeholder = st.empty()
     
-    study_name = f"study_{task.id}"
+    study_name = active_task.get("study_name", f"study_{task.id}")
     redis_url = "redis://localhost:6379/1"
     storage = JournalStorage(JournalRedisStorage(redis_url))
     
