@@ -8,8 +8,6 @@ def create_excel_buffer(data: pd.DataFrame, metrics: dict, top_configs: list = N
     metrics_df = pd.DataFrame(metrics.items(), columns=["Metric", "Value"])
     
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        metrics_df.to_excel(writer, sheet_name='Best Summary', index=False)
-        
         if top_configs:
             top_df = pd.DataFrame(top_configs)
             if 'params' in top_df.columns:
