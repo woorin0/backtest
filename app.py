@@ -211,7 +211,6 @@ class TestStrategy(bt.Strategy):
         ('use_date_range', False),
         ('start_date', datetime.datetime(1900, 1, 1)),
         ('end_date', datetime.datetime(2050, 1, 1)),
-        ('entry_type', 'both'),
         ('hl_price', optuna_trial.suggest_categorical('hl_price', ['BB', 'H/L OTT', 'MAX']) if 'optuna_trial' in globals() and optuna_trial else 'H/L OTT'),
         ('open_at_hl', optuna_trial.suggest_categorical('open_at_hl', ['limits', 'close']) if 'optuna_trial' in globals() and optuna_trial else 'limits'),
         ('open_at_ll', optuna_trial.suggest_categorical('open_at_ll', ['limits', 'close']) if 'optuna_trial' in globals() and optuna_trial else 'limits'),
@@ -263,22 +262,24 @@ class TestStrategy(bt.Strategy):
         self.hott = HOTTIndicator(period=self.p.hott_h_length, length=self.p.hott_length, percent=self.p.hott_percent, use_high=self.p.hott_use_high, matype=self.p.hott_ma_type)
         self.tr_ma = UniversalMA(self.dataclose, period=self.p.tr_ma_length, matype=self.p.tr_ma_type)
         
+        self.entry_id = None # 'HL' or 'LL'
         self.inst_qty = 0 # 1분할 수량
         self.pending_orders = []
-        self.pending_exits = []
 
     def notify_order(self, order):
         if order.status in [order.Submitted, order.Accepted]: return
         if order.status == order.Completed:
             if order.isbuy():
-                # 진입 성공 시 1분할 수량 계산 (전량 / Installment)
-                self.inst_qty = order.executed.size / self.p.installment
+                # 진입 성공 시 ID 기록 및 수량 계산
+                self.entry_id = order.info.get('id', 'HL')
+                pow10 = math.pow(10, self.p.exchange_decimal)
+                self.inst_qty = math.ceil((order.executed.size / self.p.installment) * pow10) / pow10
             elif order.issell():
                 if not self.position:
+                    self.entry_id = None
                     self.inst_qty = 0
             
         self.pending_orders = [o for o in self.pending_orders if o.ref != order.ref]
-        self.pending_exits = [o for o in self.pending_exits if o.ref != order.ref]
 
     def next(self):
         if self.p.use_date_range:
@@ -302,58 +303,59 @@ class TestStrategy(bt.Strategy):
         ll_cond = self.ma2[0] * (1 - self.ma1[0] * self.p.ll_mult - self.p.entry_ll_per) if self.p.ll_volatility_filter else self.ma2[0] * (1 - self.p.entry_ll_per)
         ll_plot = ll_cond
         
-        # 1. 진입 로직 (항상 100% 전량 진입)
+        # 1. 진입 로직
         if not self.position and len(self.pending_orders) == 0:
             pow10 = math.pow(10, self.p.exchange_decimal)
             qty_raw = math.floor((safe_cap / safe_close) * pow10) / pow10
             
             if self.p.open_at_hl == 'limits' and close_p <= hl_plot:
                 ord = self.buy(exectype=bt.Order.Stop, price=hl_plot, size=qty_raw)
+                ord.info['id'] = 'HL'
                 self.pending_orders.append(ord)
             elif self.p.open_at_hl == 'close' and close_p > hl_plot:
                 ord = self.buy(size=qty_raw)
+                ord.info['id'] = 'HL'
                 self.pending_orders.append(ord)
             elif self.p.open_at_ll == 'limits' and close_p >= ll_plot:
                 ord = self.buy(exectype=bt.Order.Limit, price=ll_plot, size=qty_raw)
+                ord.info['id'] = 'LL'
                 self.pending_orders.append(ord)
             elif self.p.open_at_ll == 'close' and close_p < ll_plot:
                 ord = self.buy(size=qty_raw)
+                ord.info['id'] = 'LL'
                 self.pending_orders.append(ord)
 
         # 2. 청산 로직 (분할 매도 방식)
-        if self.position.size > 0:
-            # TP/SL 가격 계산 (최신 진입가 기준)
+        if self.position.size > 0 and self.entry_id:
             last_entry = self.position.price
+            sell_qty = min(self.inst_qty, self.position.size)
             
-            # HL 계열 익절/손경 (ATR/Fixed 선택)
-            tp_hl_f = last_entry * (1 + self.p.tp_hl_per)
-            tp_hl_a = last_entry + self.p.hl_tp_atr_mul * self.atr_tp[0]
-            tp_hl = tp_hl_f if self.p.hl_tp_price == 'Fixed' else (tp_hl_a if self.p.hl_tp_price == 'ATR' else max(tp_hl_f, tp_hl_a))
+            if self.entry_id == 'HL':
+                tp_f = last_entry * (1 + self.p.tp_hl_per)
+                tp_a = last_entry + self.p.hl_tp_atr_mul * self.atr_tp[0]
+                tp = tp_f if self.p.hl_tp_price == 'Fixed' else (tp_a if self.p.hl_tp_price == 'ATR' else max(tp_f, tp_a))
+                
+                sl_f = last_entry * (1 - self.p.sl_hl_per)
+                sl_a = last_entry - self.p.hl_sl_atr_mul * self.atr_sl[0]
+                sl = sl_f if self.p.hl_sl_price == 'Fixed' else (sl_a if self.p.hl_sl_price == 'ATR' else max(sl_f, sl_a))
+                
+                if self.p.exit_at_hl == 'limits':
+                    if self.datahigh[0] >= tp: self.sell(size=sell_qty, price=tp, exectype=bt.Order.Limit)
+                    elif self.datalow[0] <= sl: self.sell(size=sell_qty, price=sl, exectype=bt.Order.Stop)
+                else: # 'close'
+                    if close_p >= tp or close_p <= sl: self.sell(size=sell_qty)
+                    
+            elif self.entry_id == 'LL':
+                tp = last_entry * (1 + self.p.tp_ll_per)
+                sl = last_entry * (1 - self.p.sl_ll_per)
+                
+                if self.p.exit_at_ll == 'limits':
+                    if self.datahigh[0] >= tp: self.sell(size=sell_qty, price=tp, exectype=bt.Order.Limit)
+                    elif self.datalow[0] <= sl: self.sell(size=sell_qty, price=sl, exectype=bt.Order.Stop)
+                else: # 'close'
+                    if close_p >= tp or close_p <= sl: self.sell(size=sell_qty)
             
-            sl_hl_f = last_entry * (1 - self.p.sl_hl_per)
-            sl_hl_a = last_entry - self.p.hl_sl_atr_mul * self.atr_sl[0]
-            sl_hl = sl_hl_f if self.p.hl_sl_price == 'Fixed' else (sl_hl_a if self.p.hl_sl_price == 'ATR' else max(sl_hl_f, sl_hl_a))
-            
-            # LL 계열 익절/손경 (Fixed 고정)
-            tp_ll = last_entry * (1 + self.p.tp_ll_per)
-            sl_ll = last_entry * (1 - self.p.sl_ll_per)
-            
-            # 청산 신호 체크
-            is_tp = False
-            is_sl = False
-            
-            # 현재 포지션이 HL인지 LL인지 구분하여 TP/SL 체크 (단순화를 위해 합집합 가능)
-            if close_p >= tp_hl or close_p >= tp_ll: is_tp = True
-            if close_p <= sl_hl or close_p <= sl_ll: is_sl = True
-            
-            # 분할 매도 실행 (신호 발생 봉마다 1/Installment 만큼 매도)
-            if is_tp or is_sl:
-                # 이번 봉에서 팔 수량 (전체의 1/N 또는 남은 전량)
-                sell_qty = min(self.inst_qty, self.position.size)
-                if sell_qty > 0:
-                    self.sell(size=sell_qty)
-            
-            # TR MA 추적 청산 (On 시 전량 청산)
+            # TR MA 추적 청산
             if self.p.tr_hl and close_p < self.tr_ma[0] and self.dataclose[-1] >= self.tr_ma[-1]:
                 self.close()
 
