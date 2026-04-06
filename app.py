@@ -1,6 +1,7 @@
 import streamlit as st
 import os
 import datetime
+import math
 import json
 from dotenv import load_dotenv
 
@@ -13,7 +14,8 @@ except ImportError:
     from optuna_integration.storages import JournalRedisStorage
 from celery.result import AsyncResult
 
-from core.tasks import run_optimization_task, celery_app
+from core.tasks import run_optuna_worker, finalize_optuna_study, celery_app
+from celery import chord
 
 # 환경 변수 로드
 load_dotenv()
@@ -342,15 +344,9 @@ class TestStrategy(bt.Strategy):
 
         # -- LL 엔트리 (피라미딩 로직)
         last_is_hl = (len(self.tickets) > 0 and self.tickets[-1]['type'] == 'HL')
-        pyra_ll_cond = not has_pos if last_is_hl else True
-        pyra_ll = pyra_ll_cond if not self.p.p_ll else True
+        pyra_ll = not has_pos if last_is_hl else True
         
-        ll2_ok = True
-        if not has_pos:
-            stop0_ll_price = self.ma2[0] * (1 - self.p.stop0_ll_per)
-            ll2_ok = close_p > stop0_ll_price
-
-        if ll_mode and pyra_ll and ll2_ok and target_qty > 0 and len(pending_buys) == 0:
+        if ll_mode and pyra_ll and target_qty > 0 and len(pending_buys) == 0:
             if self.p.open_at_ll == 'limits' and close_p >= ll_plot:
                 ordId = self.buy(exectype=bt.Order.Limit, price=ll_plot, size=target_qty)
                 ordId.ticket_info = {'type': 'LL'}
@@ -378,11 +374,11 @@ class TestStrategy(bt.Strategy):
                         
                 elif ticket['type'] == 'LL':
                     tp_f = ticket['price'] * (1 + self.p.tp_ll_per)
-                    tp_a = ticket['price'] + self.p.ll_tp_atr_mul * self.atr10[0]
+                    tp_a = ticket['price'] + self.p.ll_tp_atr_mul * self.atr_tp[0]
                     tp = tp_f if self.p.ll_tp_price == 'Fixed' else (tp_a if self.p.ll_tp_price == 'ATR' else max(tp_f, tp_a))
                     
                     sl_f = ticket['price'] * (1 - self.p.sl_ll_per)
-                    sl_a = ticket['price'] - self.p.ll_sl_atr_mul * self.atr10[0]
+                    sl_a = ticket['price'] - self.p.ll_sl_atr_mul * self.atr_tp[0]
                     sl = sl_f if self.p.ll_sl_price == 'Fixed' else (sl_a if self.p.ll_sl_price == 'ATR' else max(sl_f, sl_a))
                     
                     if close_p >= tp or close_p <= sl:
@@ -518,22 +514,46 @@ if os.path.exists(CACHE_FILE):
 if start_btn and not active_task:
     st.subheader("🔄 최적화 실행 진행 현황")
     
-    # Celery Task Trigger
-    task = run_optimization_task.apply_async(kwargs={
-        'exchange': exchange,
-        'symbol': symbol,
-        'timeframe': timeframe,
-        'start_date': str(start_date),
-        'end_date': str(end_date),
-        'limit': limit,
-        'engine': engine,
-        'code_str': strategy_code,
-        'n_trials': n_trials
-    })
+    # 1. 분산 처리를 위한 설정 (4코어 활용)
+    study_name = f"study_{int(time.time())}"
+    trials_per_worker = n_trials // 4
+    rem = n_trials % 4
     
-    # 프로세스 캐시 저장
+    # 2. Header: 4개의 병렬 워커 생성
+    header = []
+    for i in range(4):
+        header.append(run_optuna_worker.s(
+            study_name=study_name,
+            exchange=exchange,
+            symbol=symbol,
+            timeframe=timeframe,
+            start_date=str(start_date),
+            end_date=str(end_date),
+            limit=limit,
+            engine=engine,
+            code_str=strategy_code,
+            n_trials=trials_per_worker + (rem if i == 3 else 0)
+        ))
+    
+    # 3. Callback: 모든 워커 완료 후 통합 리포트 생성
+    callback = finalize_optuna_study.s(
+        study_name=study_name,
+        exchange=exchange,
+        symbol=symbol,
+        timeframe=timeframe,
+        start_date=str(start_date),
+        end_date=str(end_date),
+        limit=limit,
+        engine=engine
+    )
+    
+    # 4. Chord 실행
+    result = chord(header)(callback)
+    
+    # 프로세스 캐시 저장 (result.id는 callback 태스크의 ID임)
     active_task = {
-        "task_id": task.id, 
+        "task_id": result.id, 
+        "study_name": study_name,
         "n_trials": n_trials,
         "exchange": exchange,
         "symbol": symbol,
@@ -552,12 +572,12 @@ if active_task:
     sym_meta = active_task.get("symbol", "BTC").replace('/', '-')
     engine_meta = active_task.get("engine", "Engine")
     
-    st.info(f"🚀 Celery 백그라운드 워커 렌더링 중... (Task ID: {task.id})")
+    st.info(f"🚀 4개 코어 분산 백테스트 실행 중... (Callback ID: {task.id})")
     
     status_placeholder = st.empty()
     gauge_placeholder = st.empty()
     
-    study_name = f"study_{task.id}"
+    study_name = active_task["study_name"]
     redis_url = "redis://localhost:6379/1"
     storage = JournalStorage(JournalRedisStorage(redis_url))
     

@@ -65,10 +65,10 @@ def run_optimization_task(self, exchange: str, symbol: str, timeframe: str, star
     if not complete_trials:
         return {"status": "FAILED", "reason": f"조건(승률60/MDD30)에 부합하는 결과가 없습니다. (총 {len(trials)}회 탐색 완료)"}
 
-    # 6. Top 30 결과 가공
-    top_30 = complete_trials[:30]
+    # 6. Top 50 결과 가공
+    top_50 = complete_trials[:50]
     top_configs = []
-    for t in top_30:
+    for t in top_50:
         top_configs.append({
             "Total Return (%)": t.value,
             "Win Rate (%)": t.user_attrs.get('Win Rate (%)', 0),
@@ -87,7 +87,7 @@ def run_optimization_task(self, exchange: str, symbol: str, timeframe: str, star
         "Win Rate (%)": best_trial.user_attrs.get('Win Rate (%)', 0), 
         "Best Params": str(best_trial.params)
     }
-    excel_buf = create_excel_buffer(data, best_metrics, top_configs)
+    excel_buf = create_excel_buffer(data, top_configs)
     
     os.makedirs("results", exist_ok=True)
     file_path = f"results/best_{self.request.id}.xlsx"
@@ -142,9 +142,9 @@ def finalize_optuna_study(self, worker_results, study_name: str, exchange: str, 
                 complete_trials.append(t)
     complete_trials.sort(key=lambda t: t.value if t.value is not None else -9999, reverse=True)
     
-    top_30 = complete_trials[:30]
+    top_50 = complete_trials[:50]
     top_configs = []
-    for t in top_30:
+    for t in top_50:
         top_configs.append({
             "Total Return (%)": t.value,
             "Win Rate (%)": t.user_attrs.get('Win Rate (%)', 0),
@@ -164,7 +164,7 @@ def finalize_optuna_study(self, worker_results, study_name: str, exchange: str, 
             "Win Rate (%)": best_trial.user_attrs.get('Win Rate (%)', 0), 
             "Best Params": str(best_trial.params)
         }
-        excel_buf = create_excel_buffer(data, best_metrics, top_configs)
+        excel_buf = create_excel_buffer(data, top_configs)
         
         os.makedirs("results", exist_ok=True)
         file_path = f"results/best_{self.request.id}.xlsx"
