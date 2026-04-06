@@ -6,7 +6,11 @@ from dotenv import load_dotenv
 
 import time
 import optuna
-from optuna.storages import RDBStorage
+from optuna.storages import JournalStorage
+try:
+    from optuna.storages import JournalRedisStorage
+except ImportError:
+    from optuna_integration.storages import JournalRedisStorage
 from celery.result import AsyncResult
 
 from core.tasks import run_optimization_task, celery_app
@@ -554,14 +558,15 @@ if active_task:
     gauge_placeholder = st.empty()
     
     study_name = f"study_{task.id}"
-    storage = RDBStorage("sqlite:///optuna_study.db")
+    redis_url = "redis://localhost:6379/1"
+    storage = JournalStorage(JournalRedisStorage(redis_url))
     
     with st.spinner("Celery 큐 대기 및 최적화 진행 중... (새로고침 하셔도 됩니다)"):
         while True:
             if task.ready():
                 break
             
-            # SQLite Optuna 진행률 폴링
+            # Redis Optuna 진행률 폴링
             try:
                 study = optuna.load_study(study_name=study_name, storage=storage)
                 trials = study.trials
@@ -579,6 +584,7 @@ if active_task:
                 status_placeholder.markdown(f"### 🔥 현재 찾아낸 최고 수익률: **{best_val:.2f}%**")
                 
             except Exception as e:
+                # study가 아직 생성되지 않았을 수 있음
                 status_placeholder.markdown("⏳ Optuna 데이터베이스 초기화 및 동기화 대기 중...")
             
             time.sleep(3.0)
