@@ -6,15 +6,10 @@ from dotenv import load_dotenv
 
 import time
 import optuna
-from optuna.storages import JournalStorage
-try:
-    from optuna.storages import JournalRedisStorage
-except ImportError:
-    from optuna_integration.storages import JournalRedisStorage
+from optuna.storages import RDBStorage
 from celery.result import AsyncResult
 
-from celery import chord
-from core.tasks import run_optuna_worker, finalize_optuna_study, celery_app
+from core.tasks import run_optimization_task, celery_app
 
 # 환경 변수 로드
 load_dotenv()
@@ -89,11 +84,11 @@ with col1:
     
     st.markdown("---")
     st.subheader("📅 타임프레임 및 최적화 설정")
-    timeframe = st.text_input("타임프레임 (예: 1d, 4h, 1h, 15m, 5m, 1m)", value="2h")
+    timeframe = st.text_input("타임프레임 (예: 1d, 4h, 1h, 15m, 5m, 1m)", value="1h")
     
     col_d1, col_d2 = st.columns(2)
     with col_d1:
-        start_date = st.date_input("시작일", value=datetime.date(2017, 1, 1))
+        start_date = st.date_input("시작일", value=datetime.date.today() - datetime.timedelta(days=30))
     with col_d2:
         end_date = st.date_input("종료일", value=datetime.date.today())
         
@@ -106,50 +101,21 @@ with col2:
     st.subheader("💻 전략 코드 입력")
     
     if engine == "Backtrader":
-        default_code = """
-import backtrader as bt
+        default_code = """import backtrader as bt
 import math
 import datetime
-
-# ==========================================
-# [커스텀 지표 MAs] 여러 MA 지원 래퍼
-# ==========================================
-class UniversalMA(bt.Indicator):
-    lines = ('ma',)
-    params = (('period', 20), ('matype', 'SMA'))
-    
-    def __init__(self):
-        t = self.p.matype
-        p = self.p.period
-        d = self.data
-        
-        if t == 'SMA': 
-            self.lines.ma = bt.indicators.SMA(d, period=p)
-        elif t == 'EMA': 
-            self.lines.ma = bt.indicators.EMA(d, period=p)
-        elif t == 'SMMA (RMA)': 
-            self.lines.ma = bt.indicators.SmoothedMovingAverage(d, period=p)
-        elif t == 'WMA': 
-            self.lines.ma = bt.indicators.WeightedMovingAverage(d, period=p)
-        elif t == 'VWMA':
-            # VWMA는 Close * Volume의 SMA / Volume의 SMA
-            vol = self.data._owner.volume if hasattr(self.data, '_owner') else self.data.volume
-            cv = d * vol
-            self.lines.ma = bt.indicators.SMA(cv, period=p) / bt.indicators.SMA(vol, period=p)
-        else: 
-            self.lines.ma = bt.indicators.SMA(d, period=p)
 
 # ==========================================
 # [커스텀 지표 1] HOTT (Optimized Trend Tracker)
 # ==========================================
 class HOTTIndicator(bt.Indicator):
     lines = ('hott',)
-    params = (('period', 100), ('length', 2), ('percent', 0.6), ('use_high', False), ('matype', 'EMA'))
+    params = (('period', 100), ('length', 2), ('percent', 0.6), ('use_high', False))
 
     def __init__(self):
         src_data = self.data.high if self.p.use_high else self.data.close
         self.highest_val = bt.indicators.Highest(src_data, period=self.p.period)
-        self.mavg = UniversalMA(self.highest_val, period=self.p.length, matype=self.p.matype)
+        self.mavg = bt.indicators.EMA(self.highest_val, period=self.p.length)
         self.addminperiod(self.p.period + self.p.length)
         
     def next(self):
@@ -185,15 +151,15 @@ class HOTTIndicator(bt.Indicator):
 # [커스텀 지표 2] BB Width/Diff 결합형 밴드
 # ==========================================
 class BBCustom(bt.Indicator):
-    lines = ('mid', 'top', 'bot', 'diff_cond')
-    params = (('period', 20), ('dev', 2.0), ('min_width', 3.0), ('diff_perc', 2.0), ('matype', 'EMA'))
+    lines = ('mid', 'top', 'bot')
+    params = (('period', 20), ('dev', 2.0), ('min_width', 3.0))
     
     def __init__(self):
-        self.mid_ma = UniversalMA(self.data.close, period=self.p.period, matype=self.p.matype)
+        self.ema = bt.indicators.EMA(self.data.close, period=self.p.period)
         self.stddev = bt.indicators.StdDev(self.data.close, period=self.p.period)
         
     def next(self):
-        mid = self.mid_ma[0]
+        mid = self.ema[0]
         std = self.stddev[0] * self.p.dev
         
         lbbdev = max(std, mid * self.p.min_width / 100.0)
@@ -203,10 +169,6 @@ class BBCustom(bt.Indicator):
         self.lines.mid[0] = mid
         self.lines.top[0] = top
         self.lines.bot[0] = bot
-        
-        safe_bot = max(abs(bot), 0.000001)
-        diff = (top / safe_bot * 100) - 100
-        self.lines.diff_cond[0] = 1.0 if diff >= self.p.diff_perc else 0.0
 
 
 # ==========================================
@@ -218,49 +180,49 @@ class TestStrategy(bt.Strategy):
         ('start_date', datetime.datetime(1900, 1, 1)),
         ('end_date', datetime.datetime(2050, 1, 1)),
         
-        # Entry Type은 both이므로 제거됨.
+        ('entry_type', 'both'),
         ('hl_price', optuna_trial.suggest_categorical('hl_price', ['BB', 'H/L OTT', 'MAX']) if 'optuna_trial' in globals() and optuna_trial else 'H/L OTT'),
         ('open_at_hl', optuna_trial.suggest_categorical('open_at_hl', ['limits', 'close']) if 'optuna_trial' in globals() and optuna_trial else 'limits'),
         ('open_at_ll', optuna_trial.suggest_categorical('open_at_ll', ['limits', 'close']) if 'optuna_trial' in globals() and optuna_trial else 'limits'),
         ('exit_at_hl', optuna_trial.suggest_categorical('exit_at_hl', ['limits', 'close']) if 'optuna_trial' in globals() and optuna_trial else 'close'),
         ('exit_at_ll', optuna_trial.suggest_categorical('exit_at_ll', ['limits', 'close']) if 'optuna_trial' in globals() and optuna_trial else 'limits'),
         ('hl_tp_price', optuna_trial.suggest_categorical('hl_tp_price', ['Fixed', 'ATR', 'both']) if 'optuna_trial' in globals() and optuna_trial else 'ATR'),
+        ('ll_tp_price', optuna_trial.suggest_categorical('ll_tp_price', ['Fixed', 'ATR', 'both']) if 'optuna_trial' in globals() and optuna_trial else 'Fixed'),
         ('hl_sl_price', optuna_trial.suggest_categorical('hl_sl_price', ['Fixed', 'ATR', 'both']) if 'optuna_trial' in globals() and optuna_trial else 'ATR'),
+        ('ll_sl_price', optuna_trial.suggest_categorical('ll_sl_price', ['Fixed', 'ATR', 'both']) if 'optuna_trial' in globals() and optuna_trial else 'Fixed'),
         ('tr_hl', optuna_trial.suggest_categorical('tr_hl', [True, False]) if 'optuna_trial' in globals() and optuna_trial else True),
         
         ('ll_volatility_filter', optuna_trial.suggest_categorical('ll_volatility_filter', [True, False]) if 'optuna_trial' in globals() and optuna_trial else False),
         ('ma1_length', optuna_trial.suggest_int('ma1_length', 10, 50) if 'optuna_trial' in globals() and optuna_trial else 20),
         ('ll_mult', optuna_trial.suggest_float('ll_mult', 1.0, 3.0) if 'optuna_trial' in globals() and optuna_trial else 1.5),
+        ('ma2_length', optuna_trial.suggest_int('ma2_length', 1, 10) if 'optuna_trial' in globals() and optuna_trial else 3),
         
-        ('ma2_type', optuna_trial.suggest_categorical('ma2_type', ['SMA', 'EMA', 'SMMA (RMA)', 'WMA', 'VWMA']) if 'optuna_trial' in globals() and optuna_trial else 'EMA'),
-        ('ma2_length', optuna_trial.suggest_int('ma2_length', 2, 10) if 'optuna_trial' in globals() and optuna_trial else 3),
-        
-        ('bb_ma_type', optuna_trial.suggest_categorical('bb_ma_type', ['SMA', 'EMA', 'SMMA (RMA)', 'WMA', 'VWMA']) if 'optuna_trial' in globals() and optuna_trial else 'EMA'),
         ('bb_length', optuna_trial.suggest_int('bb_length', 10, 50) if 'optuna_trial' in globals() and optuna_trial else 20),
         ('bb_dev', optuna_trial.suggest_float('bb_dev', 1.0, 3.0) if 'optuna_trial' in globals() and optuna_trial else 2.0),
         ('bb_min_width', optuna_trial.suggest_float('bb_min_width', 1.0, 5.0) if 'optuna_trial' in globals() and optuna_trial else 3.0),
-        ('bb_diff', optuna_trial.suggest_categorical('bb_diff', [True, False]) if 'optuna_trial' in globals() and optuna_trial else False),
-        ('bb_diff_perc', optuna_trial.suggest_float('bb_diff_perc', 0.5, 5.0) if 'optuna_trial' in globals() and optuna_trial else 2.0),
         
-        ('hott_ma_type', optuna_trial.suggest_categorical('hott_ma_type', ['SMA', 'EMA', 'SMMA (RMA)', 'WMA', 'VWMA']) if 'optuna_trial' in globals() and optuna_trial else 'EMA'),
-        ('hott_length', optuna_trial.suggest_int('hott_length', 2, 10) if 'optuna_trial' in globals() and optuna_trial else 2),
+        ('hott_length', optuna_trial.suggest_int('hott_length', 1, 10) if 'optuna_trial' in globals() and optuna_trial else 2),
         ('hott_percent', optuna_trial.suggest_float('hott_percent', 0.1, 2.0) if 'optuna_trial' in globals() and optuna_trial else 0.6),
-        ('hott_h_length', optuna_trial.suggest_int('hott_h_length', 50, 150) if 'optuna_trial' in globals() and optuna_trial else 100),
-        ('high_int', optuna_trial.suggest_int('high_int', 0, 1) if 'optuna_trial' in globals() and optuna_trial else 0),
+        ('hott_h_length', optuna_trial.suggest_int('hott_h_length', 50, 200) if 'optuna_trial' in globals() and optuna_trial else 100),
+        ('hott_use_high', optuna_trial.suggest_categorical('hott_use_high', [True, False]) if 'optuna_trial' in globals() and optuna_trial else False),
         
+        ('entry_hl_per', optuna_trial.suggest_float('entry_hl_per', -0.05, 0.05) if 'optuna_trial' in globals() and optuna_trial else 0.0),
         ('entry_ll_per', optuna_trial.suggest_float('entry_ll_per', 0.02, 0.15) if 'optuna_trial' in globals() and optuna_trial else 0.06),
-        ('tp_hl_per', optuna_trial.suggest_float('tp_hl_per', 0.005, 0.1) if 'optuna_trial' in globals() and optuna_trial else 0.015),
-        ('sl_hl_per', optuna_trial.suggest_float('sl_hl_per', 0.01, 0.1) if 'optuna_trial' in globals() and optuna_trial else 0.02),
-        ('tp_ll_per', optuna_trial.suggest_float('tp_ll_per', 0.01, 0.1) if 'optuna_trial' in globals() and optuna_trial else 0.015),
-        ('sl_ll_per', optuna_trial.suggest_float('sl_ll_per', 0.01, 0.1) if 'optuna_trial' in globals() and optuna_trial else 0.015),
+        ('tp_hl_per', optuna_trial.suggest_float('tp_hl_per', 0.005, 0.05) if 'optuna_trial' in globals() and optuna_trial else 0.015),
+        ('sl_hl_per', optuna_trial.suggest_float('sl_hl_per', 0.01, 0.07) if 'optuna_trial' in globals() and optuna_trial else 0.02),
+        ('tp_ll_per', optuna_trial.suggest_float('tp_ll_per', 0.005, 0.05) if 'optuna_trial' in globals() and optuna_trial else 0.015),
+        ('sl_ll_per', optuna_trial.suggest_float('sl_ll_per', 0.01, 0.07) if 'optuna_trial' in globals() and optuna_trial else 0.015),
         
-        ('hl_tp_atr_mul', optuna_trial.suggest_float('hl_tp_atr_mul', 1.0, 5.0) if 'optuna_trial' in globals() and optuna_trial else 2.0),
-        ('hl_sl_atr_mul', optuna_trial.suggest_float('hl_sl_atr_mul', 1.0, 5.0) if 'optuna_trial' in globals() and optuna_trial else 4.0),
+        ('atr_length', optuna_trial.suggest_int('atr_length', 7, 20) if 'optuna_trial' in globals() and optuna_trial else 10),
+        ('atr_length2', optuna_trial.suggest_int('atr_length2', 7, 20) if 'optuna_trial' in globals() and optuna_trial else 10),
+        ('hl_tp_atr_mul', optuna_trial.suggest_float('hl_tp_atr_mul', 1.0, 6.0) if 'optuna_trial' in globals() and optuna_trial else 2.0),
+        ('ll_tp_atr_mul', optuna_trial.suggest_float('ll_tp_atr_mul', 1.0, 6.0) if 'optuna_trial' in globals() and optuna_trial else 2.0),
+        ('hl_sl_atr_mul', optuna_trial.suggest_float('hl_sl_atr_mul', 1.0, 6.0) if 'optuna_trial' in globals() and optuna_trial else 4.0),
+        ('ll_sl_atr_mul', optuna_trial.suggest_float('ll_sl_atr_mul', 1.0, 6.0) if 'optuna_trial' in globals() and optuna_trial else 4.0),
         
-        ('tr_ma_type', optuna_trial.suggest_categorical('tr_ma_type', ['SMA', 'EMA', 'SMMA (RMA)', 'WMA', 'VWMA']) if 'optuna_trial' in globals() and optuna_trial else 'EMA'),
         ('tr_ma_length', optuna_trial.suggest_int('tr_ma_length', 50, 200) if 'optuna_trial' in globals() and optuna_trial else 100),
-        
-        ('installment', optuna_trial.suggest_categorical('installment', [1, 2, 3, 4, 5]) if 'optuna_trial' in globals() and optuna_trial else 1),
+        ('exchange_decimal', optuna_trial.suggest_int('exchange_decimal', 0, 8) if 'optuna_trial' in globals() and optuna_trial else 3),
+        ('installment', 1),
     )
 
     def __init__(self):
@@ -268,228 +230,170 @@ class TestStrategy(bt.Strategy):
         self.datahigh = self.datas[0].high
         self.datalow = self.datas[0].low
         
-        self.atr10 = bt.indicators.ATR(self.datas[0], period=10)
+        self.atr_tp = bt.indicators.ATR(self.datas[0], period=self.p.atr_length)
+        self.atr_sl = bt.indicators.ATR(self.datas[0], period=self.p.atr_length2)
+        self.atr_hl = bt.indicators.ATR(self.datas[0], period=self.p.bb_length if self.p.hl_price == 'BB' else self.p.hott_h_length)
         
         vol_src = (self.datahigh - self.datalow) / bt.If(self.dataclose > 0, self.dataclose, 0.000001)
         self.ma1 = bt.indicators.SMA(vol_src, period=self.p.ma1_length)
-        self.ma2 = UniversalMA(self.dataclose, period=self.p.ma2_length, matype=self.p.ma2_type)
+        self.ma2 = bt.indicators.EMA(self.dataclose, period=self.p.ma2_length)
         
         self.bb = BBCustom(
             period=self.p.bb_length, 
             dev=self.p.bb_dev, 
-            min_width=self.p.bb_min_width, 
-            diff_perc=self.p.bb_diff_perc,
-            matype=self.p.bb_ma_type
+            min_width=self.p.bb_min_width
         )
         
         self.hott = HOTTIndicator(
             period=self.p.hott_h_length, 
             length=self.p.hott_length, 
             percent=self.p.hott_percent,
-            matype=self.p.hott_ma_type
+            use_high=self.p.hott_use_high
         )
         
-        self.tr_ma = UniversalMA(self.dataclose, period=self.p.tr_ma_length, matype=self.p.tr_ma_type)
+        self.tr_ma = bt.indicators.EMA(self.dataclose, period=self.p.tr_ma_length)
 
         # 다중 포지션 추적용 우회 티켓 관리 (Pyramiding)
         self.tickets = []  
         self.pending_orders = []
-        self.pending_exits = []
 
     def notify_order(self, order):
         if order.status in [order.Submitted, order.Accepted]: return
         
         if order.status == order.Completed:
-            tinfo = getattr(order, 'ticket_info', None)
             if order.isbuy():
-                if tinfo:
+                # 매수 체결 시 해당 티켓 정보를 기록
+                ticket_info = getattr(order, 'ticket_info', None)
+                if ticket_info:
                     self.tickets.append({
-                        'type': tinfo['type'], 
+                        'type': ticket_info['type'], 
                         'price': order.executed.price, 
-                        'size': order.executed.size,
-                        'inst_qty': tinfo.get('inst_qty', order.executed.size)
+                        'size': order.executed.size
                     })
             elif order.issell():
-                if tinfo and 'type' in tinfo and tinfo['type'] in ['Exit_HL', 'Exit_LL']:
-                    self.tickets = [t for t in self.tickets if t['type'] != tinfo['type'].split('_')[1]]
+                # 매도 체결 시 100% 청산 (통합)
                 if not self.position:
                     self.tickets.clear()
                     
+        # 주문 완료 후 Pending 목록에서 제거
         self.pending_orders = [o for o in self.pending_orders if o.ref != order.ref]
-        self.pending_exits = [o for o in self.pending_exits if o.ref != order.ref]
 
     def _close_all(self):
         if self.position:
             self.close()
             for o in self.pending_orders:
                 self.cancel(o)
-            for o in self.pending_exits:
-                self.cancel(o)
             self.pending_orders.clear()
-            self.pending_exits.clear()
             self.tickets.clear()
 
     def next(self):
+        # 1. Date Range
         if self.p.use_date_range:
             dt = self.datas[0].datetime.datetime(0)
             if not (self.p.start_date <= dt < self.p.end_date):
                 return
                 
+        # 2. 기초 값 준비
         close_p = self.dataclose[0]
         safe_close = max(close_p, 0.000001)
-        safe_cap = max(self.broker.getvalue(), 0) # PineScript initial_capital 연동 시뮬레이션 (100%)
+        safe_cap = max(self.broker.getvalue() * 0.95, 0) # 5% 마진 여유금
         
         lbbUpper = self.bb.lines.top[0]
         hott_val = self.hott.lines.hott[0]
-        if self.p.high_int > 0 and len(self) > self.p.high_int:
-            hott_val = self.hott.lines.hott[-self.p.high_int]
-            
+        
+        # 3. HL Plot
         if self.p.hl_price == 'BB': hl_base = lbbUpper
         elif self.p.hl_price == 'H/L OTT': hl_base = hott_val
         elif self.p.hl_price == 'MAX': hl_base = max(hott_val, lbbUpper)
         else: hl_base = min(hott_val, lbbUpper)
         
-        hl_plot = hl_base
+        hl_plot = hl_base * (1 + self.p.entry_hl_per) + self.atr_hl[0] * self.p.atr_mul0
         
+        # 4. LL Plot
         ll_cond = self.ma2[0] * (1 - self.ma1[0] * self.p.ll_mult - self.p.entry_ll_per) if self.p.ll_volatility_filter else self.ma2[0] * (1 - self.p.entry_ll_per)
         ll_plot = ll_cond
         
+        # 5. 상태 변수
         has_pos = self.position.size > 0
-        diff_hl_cond = self.p.hl_price in ['BB', 'MAX', 'MIN']
-        lbb_diff_ok = (self.bb.lines.diff_cond[0] == 1.0) if (self.p.bb_diff and diff_hl_cond) else True
         
-        # PineScript `exchange_decimal = 3` 진입 수량 반올림 완전 일치
-        base_qty = safe_cap / safe_close
-        target_qty = round(base_qty, 3) 
-        inst_qty_raw = math.ceil(base_qty / self.p.installment * 1000) / 1000.0
-        
+        pow10 = math.pow(10, self.p.exchange_decimal)
+        target_qty = (safe_cap / safe_close) / self.p.installment
+        target_qty = round(target_qty * pow10) / pow10
+
+        # 6. 진입 (Entry)
+        hl_mode = self.p.entry_type in ['both', 'HighLong']
+        ll_mode = self.p.entry_type in ['both', 'LowLong']
         pending_buys = [o for o in self.pending_orders if o.isbuy()]
         
-        # PineScript `both` 고정이므로 두 로직 모두 수행 (Pyramiding = 0 이므로 has_pos가 없을 때만 진입 허용)
-        if not has_pos and target_qty > 0 and len(pending_buys) == 0:
-            if lbb_diff_ok:
-                if self.p.open_at_hl == 'limits' and close_p <= hl_plot:
-                    is_lim = (self.p.exit_at_hl == 'limits')
-                    ordId = self.buy(exectype=bt.Order.Stop, price=hl_plot, size=target_qty, transmit=not is_lim)
-                    ordId.ticket_info = {'type': 'HL', 'inst_qty': inst_qty_raw}
-                    self.pending_orders.append(ordId)
-                    
-                    if is_lim:
-                        tp_f = hl_plot * (1 + self.p.tp_hl_per)
-                        tp_a = hl_plot + self.p.hl_tp_atr_mul * self.atr10[0]
-                        tp = tp_f if self.p.hl_tp_price == 'Fixed' else (tp_a if self.p.hl_tp_price == 'ATR' else max(tp_f, tp_a))
-                        sl_f = hl_plot * (1 - self.p.sl_hl_per)
-                        sl_a = hl_plot - self.p.hl_sl_atr_mul * self.atr10[0]
-                        sl = sl_f if self.p.hl_sl_price == 'Fixed' else (sl_a if self.p.hl_sl_price == 'ATR' else max(sl_f, sl_a))
-                        
-                        o_tp = self.sell(size=inst_qty_raw, exectype=bt.Order.Limit, price=tp, parent=ordId, transmit=False)
-                        o_sl = self.sell(size=inst_qty_raw, exectype=bt.Order.Stop, price=sl, parent=ordId, transmit=True, oco=o_tp)
-                        o_tp.ticket_info = {'type': 'Exit_HL'}
-                        o_sl.ticket_info = {'type': 'Exit_HL'}
-                        self.pending_exits.extend([o_tp, o_sl])
-
-                elif self.p.open_at_hl == 'close' and close_p > hl_plot:
-                    ordId = self.buy(size=target_qty)
-                    ordId.ticket_info = {'type': 'HL', 'inst_qty': inst_qty_raw}
-                    self.pending_orders.append(ordId)
-
-            if self.p.open_at_ll == 'limits' and close_p >= ll_plot:
-                is_lim = (self.p.exit_at_ll == 'limits')
-                ordId = self.buy(exectype=bt.Order.Limit, price=ll_plot, size=target_qty, transmit=not is_lim)
-                ordId.ticket_info = {'type': 'LL', 'inst_qty': inst_qty_raw}
+        # -- HL 엔트리 (비 피라미딩 구조)
+        if hl_mode and not has_pos and target_qty > 0 and len(pending_buys) == 0:
+            if self.p.open_at_hl == 'limits' and close_p <= hl_plot:
+                ordId = self.buy(exectype=bt.Order.Stop, price=hl_plot, size=target_qty)
+                ordId.ticket_info = {'type': 'HL'}
                 self.pending_orders.append(ordId)
-                
-                if is_lim:
-                    tp = ll_plot * (1 + self.p.tp_ll_per)
-                    sl = ll_plot * (1 - self.p.sl_ll_per)
-                    o_tp = self.sell(size=inst_qty_raw, exectype=bt.Order.Limit, price=tp, parent=ordId, transmit=False)
-                    o_sl = self.sell(size=inst_qty_raw, exectype=bt.Order.Stop, price=sl, parent=ordId, transmit=True, oco=o_tp)
-                    o_tp.ticket_info = {'type': 'Exit_LL'}
-                    o_sl.ticket_info = {'type': 'Exit_LL'}
-                    self.pending_exits.extend([o_tp, o_sl])
+            elif self.p.open_at_hl == 'close' and close_p > hl_plot:
+                ordId = self.buy(size=target_qty)
+                ordId.ticket_info = {'type': 'HL'}
+                self.pending_orders.append(ordId)
 
+        # -- LL 엔트리 (피라미딩 로직)
+        last_is_hl = (len(self.tickets) > 0 and self.tickets[-1]['type'] == 'HL')
+        pyra_ll_cond = not has_pos if last_is_hl else True
+        pyra_ll = pyra_ll_cond if not self.p.p_ll else True
+        
+        ll2_ok = True
+        if not has_pos:
+            stop0_ll_price = self.ma2[0] * (1 - self.p.stop0_ll_per)
+            ll2_ok = close_p > stop0_ll_price
+
+        if ll_mode and pyra_ll and ll2_ok and target_qty > 0 and len(pending_buys) == 0:
+            if self.p.open_at_ll == 'limits' and close_p >= ll_plot:
+                ordId = self.buy(exectype=bt.Order.Limit, price=ll_plot, size=target_qty)
+                ordId.ticket_info = {'type': 'LL'}
+                self.pending_orders.append(ordId)
             elif self.p.open_at_ll == 'close' and close_p < ll_plot:
                 ordId = self.buy(size=target_qty)
-                ordId.ticket_info = {'type': 'LL', 'inst_qty': inst_qty_raw}
+                ordId.ticket_info = {'type': 'LL'}
                 self.pending_orders.append(ordId)
 
-        active_exits_to_keep = []
-        for o in self.pending_exits:
-            if o.status not in [bt.Order.Completed, bt.Order.Canceled, bt.Order.Margin, bt.Order.Rejected]:
-                tinfo = getattr(o, 'ticket_info', {})
-                t_type = tinfo.get('type')
-                
-                needs_update = False
-                if t_type == 'Exit_HL':
-                    if hasattr(o, 'parent') and o.parent and o.parent.status not in [bt.Order.Completed, bt.Order.Canceled]:
-                        needs_update = False 
-                    elif self.p.hl_tp_price != 'Fixed' or self.p.hl_sl_price != 'Fixed':
-                        needs_update = True
-                elif t_type == 'Exit_LL':
-                    needs_update = False
-                
-                if needs_update:
-                    self.cancel(o)
-                else:
-                    active_exits_to_keep.append(o)
+        # 7. 청산 (Exit) - 티켓별로 TP/SL 감시 (파인스크립트 모사)
+        if has_pos:
+            should_close = False
+            for ticket in self.tickets:
+                if ticket['type'] == 'HL':
+                    tp_f = ticket['price'] * (1 + self.p.tp_hl_per)
+                    tp_a = hl_plot + self.p.hl_tp_atr_mul * self.atr_tp[0]
+                    tp = tp_f if self.p.hl_tp_price == 'Fixed' else (tp_a if self.p.hl_tp_price == 'ATR' else max(tp_f, tp_a))
                     
-        self.pending_exits = active_exits_to_keep
-
-        hl_tickets = [t for t in self.tickets if t['type'] == 'HL']
-        ll_tickets = [t for t in self.tickets if t['type'] == 'LL']
-        hl_sum = sum(t['size'] for t in hl_tickets)
-        ll_sum = sum(t['size'] for t in ll_tickets)
-
-        if hl_sum > 0:
-            ticket = hl_tickets[-1]
-            hl_qty = min(hl_sum, ticket.get('inst_qty', hl_sum))
-            
-            tr_trigger = self.p.tr_hl and close_p < self.tr_ma[0] and self.dataclose[-1] >= self.tr_ma[-1]
-            if tr_trigger:
-                ordId = self.sell(size=hl_qty)
-                ordId.ticket_info = {'type': 'Exit_HL'}
-            else:
-                last_p = hl_tickets[-1]['price']
-                tp_f = last_p * (1 + self.p.tp_hl_per)
-                tp_a = last_p + self.p.hl_tp_atr_mul * self.atr10[0]
-                tp = tp_f if self.p.hl_tp_price == 'Fixed' else (tp_a if self.p.hl_tp_price == 'ATR' else max(tp_f, tp_a))
-                
-                sl_f = last_p * (1 - self.p.sl_hl_per)
-                sl_a = last_p - self.p.hl_sl_atr_mul * self.atr10[0]
-                sl = sl_f if self.p.hl_sl_price == 'Fixed' else (sl_a if self.p.hl_sl_price == 'ATR' else max(sl_f, sl_a))
-
-                if self.p.exit_at_hl == 'limits':
-                    has_active = any(getattr(x, 'ticket_info', {}).get('type') == 'Exit_HL' for x in self.pending_exits)
-                    if not has_active:
-                        o_tp = self.sell(size=hl_qty, exectype=bt.Order.Limit, price=tp)
-                        o_sl = self.sell(size=hl_qty, exectype=bt.Order.Stop, price=sl, oco=o_tp)
-                        o_tp.ticket_info = {'type': 'Exit_HL'}
-                        o_sl.ticket_info = {'type': 'Exit_HL'}
-                        self.pending_exits.extend([o_tp, o_sl])
-                else:
+                    sl_f = hl_plot * (1 - self.p.sl_hl_per)
+                    sl_a = hl_plot - self.p.hl_sl_atr_mul * self.atr_sl[0]
+                    sl = sl_f if self.p.hl_sl_price == 'Fixed' else (sl_a if self.p.hl_sl_price == 'ATR' else max(sl_f, sl_a))
+                    
                     if close_p >= tp or close_p <= sl:
-                        ordId = self.sell(size=hl_qty)
-                        ordId.ticket_info = {'type': 'Exit_HL'}
-
-        if ll_sum > 0:
-            ticket = ll_tickets[-1]
-            ll_qty = min(ll_sum, ticket.get('inst_qty', ll_sum))
-            last_p = ticket['price']
-            tp = last_p * (1 + self.p.tp_ll_per)
-            sl = last_p * (1 - self.p.sl_ll_per)
-
-            if self.p.exit_at_ll == 'limits':
-                has_active = any(getattr(x, 'ticket_info', {}).get('type') == 'Exit_LL' for x in self.pending_exits)
-                if not has_active:
-                    o_tp = self.sell(size=ll_qty, exectype=bt.Order.Limit, price=tp)
-                    o_sl = self.sell(size=ll_qty, exectype=bt.Order.Stop, price=sl, oco=o_tp)
-                    o_tp.ticket_info = {'type': 'Exit_LL'}
-                    o_sl.ticket_info = {'type': 'Exit_LL'}
-                    self.pending_exits.extend([o_tp, o_sl])
-            else:
-                if close_p >= tp or close_p <= sl:
-                    ordId = self.sell(size=ll_qty)
-                    ordId.ticket_info = {'type': 'Exit_LL'}
+                        should_close = True
+                        
+                elif ticket['type'] == 'LL':
+                    tp_f = ticket['price'] * (1 + self.p.tp_ll_per)
+                    tp_a = ticket['price'] + self.p.ll_tp_atr_mul * self.atr10[0]
+                    tp = tp_f if self.p.ll_tp_price == 'Fixed' else (tp_a if self.p.ll_tp_price == 'ATR' else max(tp_f, tp_a))
+                    
+                    sl_f = ticket['price'] * (1 - self.p.sl_ll_per)
+                    sl_a = ticket['price'] - self.p.ll_sl_atr_mul * self.atr10[0]
+                    sl = sl_f if self.p.ll_sl_price == 'Fixed' else (sl_a if self.p.ll_sl_price == 'ATR' else max(sl_f, sl_a))
+                    
+                    if close_p >= tp or close_p <= sl:
+                        should_close = True
+                    
+                    if self.p.exit_at_ll == 'close':
+                        stop_ll = close_p * (1 - self.p.stop0_ll_per)
+                        if close_p <= stop_ll:
+                            should_close = True
+                            
+            if self.p.tr_hl and close_p < self.tr_ma[0] and self.dataclose[-1] >= self.tr_ma[-1]:
+                should_close = True
+                
+            if should_close:
+                self._close_all()
 
 
 # ==========================================
@@ -511,11 +415,7 @@ if 'data' in globals():
     cerebro.addstrategy(TestStrategy)
     cerebro.broker.setcash(10000.0)
     cerebro.broker.setcommission(commission=0.0008)
-    
-    # PineScript `slippage = 3` (3틱 단위 슬리피지) 완벽 모사
-    # 달러나 퍼센트 고정값이 아닌, 각 코인의 최소 호가단위(Tick Size)를 기준으로 마찰비용을 산출
-    mintick = 0.1  # 향후 ccxt 심볼 정보나 app.py UI를 통해 동적으로 주입되도록 변수화
-    cerebro.broker.set_slippage_fixed(3 * mintick)
+    cerebro.broker.set_slippage_perc(0.0003)
 
     cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name="trades")
     cerebro.addanalyzer(bt.analyzers.DrawDown, _name="drawdown")
@@ -553,7 +453,6 @@ if 'data' in globals():
         "MDD (%)": mdd,
         "Total Trades": total_tr
     }
-
 """
     else:
         default_code = """# Vectorbt 엔진용 전략 스크립트 템플릿입니다.
@@ -615,49 +514,22 @@ if os.path.exists(CACHE_FILE):
 if start_btn and not active_task:
     st.subheader("🔄 최적화 실행 진행 현황")
     
-    study_id = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
-    study_name = f"study_{study_id}"
-    
-    threads = 4
-    trials_per_worker = n_trials // threads
-    remainder = n_trials % threads
-    
-    header_tasks = []
-    for i in range(threads):
-        worker_trials = trials_per_worker + (remainder if i == 0 else 0)
-        header_tasks.append(
-            run_optuna_worker.s(
-                study_name=study_name,
-                exchange=exchange,
-                symbol=symbol,
-                timeframe=timeframe,
-                start_date=str(start_date),
-                end_date=str(end_date),
-                limit=limit,
-                engine=engine,
-                code_str=strategy_code,
-                n_trials=worker_trials
-            )
-        )
-        
-    callback = finalize_optuna_study.s(
-        study_name=study_name,
-        exchange=exchange,
-        symbol=symbol,
-        timeframe=timeframe,
-        start_date=str(start_date),
-        end_date=str(end_date),
-        limit=limit,
-        engine=engine
-    )
-    
-    # Celery Chord 맵리듀스 발동! (4워커 일제 사격)
-    task = chord(header_tasks)(callback)
+    # Celery Task Trigger
+    task = run_optimization_task.apply_async(kwargs={
+        'exchange': exchange,
+        'symbol': symbol,
+        'timeframe': timeframe,
+        'start_date': str(start_date),
+        'end_date': str(end_date),
+        'limit': limit,
+        'engine': engine,
+        'code_str': strategy_code,
+        'n_trials': n_trials
+    })
     
     # 프로세스 캐시 저장
     active_task = {
         "task_id": task.id, 
-        "study_name": study_name,
         "n_trials": n_trials,
         "exchange": exchange,
         "symbol": symbol,
@@ -681,9 +553,8 @@ if active_task:
     status_placeholder = st.empty()
     gauge_placeholder = st.empty()
     
-    study_name = active_task.get("study_name", f"study_{task.id}")
-    redis_url = "redis://localhost:6379/1"
-    storage = JournalStorage(JournalRedisStorage(redis_url))
+    study_name = f"study_{task.id}"
+    storage = RDBStorage("sqlite:///optuna_study.db")
     
     with st.spinner("Celery 큐 대기 및 최적화 진행 중... (새로고침 하셔도 됩니다)"):
         while True:
