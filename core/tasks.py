@@ -96,7 +96,7 @@ def run_optimization_task(self, exchange: str, symbol: str, timeframe: str, star
         
     return {"status": "SUCCESS", "study_name": study_name, "best_value": best_trial.value, "excel_file": file_path}
 
-@celery_app.task(bind=True)
+@celery_app.task(bind=True, soft_time_limit=1500, time_limit=1800)
 def run_optuna_worker(self, study_name: str, exchange: str, symbol: str, timeframe: str, start_date: str, end_date: str, limit: int, engine: str, code_str: str, n_trials: int):
     data = fetch_candles(exchange, symbol, timeframe, start_date, end_date, limit, progress_bar=None)
     if data is None or data.empty:
@@ -121,16 +121,24 @@ def run_optuna_worker(self, study_name: str, exchange: str, symbol: str, timefra
     return {"status": "worker_done", "worker_id": self.request.id, "n_trials": n_trials}
 
 
-@celery_app.task(bind=True)
+@celery_app.task(bind=True, soft_time_limit=600, time_limit=900)
 def finalize_optuna_study(self, worker_results, study_name: str, exchange: str, symbol: str, timeframe: str, start_date: str, end_date: str, limit: int, engine: str):
     # worker_results는 [결과1, 결과2, 결과3, 결과4] 리스트로 들어옴
     
-    # 엑셀 생성을 위한 데이터 로드
-    data = fetch_candles(exchange, symbol, timeframe, start_date, end_date, limit, progress_bar=None)
+    # 엑셀 생성을 위한 데이터 로드 (타임아웃 및 재시도 고려)
+    try:
+        data = fetch_candles(exchange, symbol, timeframe, start_date, end_date, limit, progress_bar=None)
+        if data is None or data.empty:
+            return {"status": "FAILED", "reason": "최종 결과 수집을 위한 데이터 로드 실패"}
+    except Exception as e:
+        return {"status": "FAILED", "reason": f"데이터 수신 중 오류 발생: {str(e)}"}
     
     redis_url = "redis://localhost:6379/1"
     storage = JournalStorage(JournalRedisStorage(redis_url))
-    study = optuna.load_study(study_name=study_name, storage=storage)
+    try:
+        study = optuna.load_study(study_name=study_name, storage=storage)
+    except Exception as e:
+        return {"status": "FAILED", "reason": f"Optuna 스터디 로드 실패: {str(e)}"}
     
     trials = study.trials
     complete_trials = []

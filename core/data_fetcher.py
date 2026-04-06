@@ -10,7 +10,10 @@ def fetch_candles(exchange_id: str, symbol: str, timeframe: str, start_date, end
             progress_bar.progress(10, text="거래소 접속 중...")
             
         exchange_class = getattr(ccxt, exchange_id.lower())
-        exchange = exchange_class()
+        exchange = exchange_class({
+            'timeout': 10000,
+            'enableRateLimit': True,
+        })
         
         # 날짜를 파싱 후 ccxt가 요구하는 밀리초(ms) 단위 timestamp로 변환
         since = int(pd.to_datetime(start_date).timestamp() * 1000)
