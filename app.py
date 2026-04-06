@@ -313,7 +313,7 @@ class TestStrategy(bt.Strategy):
         elif self.p.hl_price == 'MAX': hl_base = max(hott_val, lbbUpper)
         else: hl_base = min(hott_val, lbbUpper)
         
-        hl_plot = hl_base * (1 + self.p.entry_hl_per) + self.atr_hl[0] * self.p.atr_mul0
+        hl_plot = hl_base
         
         # 4. LL Plot
         ll_cond = self.ma2[0] * (1 - self.ma1[0] * self.p.ll_mult - self.p.entry_ll_per) if self.p.ll_volatility_filter else self.ma2[0] * (1 - self.p.entry_ll_per)
@@ -383,11 +383,6 @@ class TestStrategy(bt.Strategy):
                     
                     if close_p >= tp or close_p <= sl:
                         should_close = True
-                    
-                    if self.p.exit_at_ll == 'close':
-                        stop_ll = close_p * (1 - self.p.stop0_ll_per)
-                        if close_p <= stop_ll:
-                            should_close = True
                             
             if self.p.tr_hl and close_p < self.tr_ma[0] and self.dataclose[-1] >= self.tr_ma[-1]:
                 should_close = True
