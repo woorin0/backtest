@@ -88,11 +88,11 @@ with col1:
     
     st.markdown("---")
     st.subheader("📅 타임프레임 및 최적화 설정")
-    timeframe = st.text_input("타임프레임 (예: 1d, 4h, 1h, 15m, 5m, 1m)", value="1h")
+    timeframe = st.text_input("타임프레임 (예: 1d, 4h, 1h, 15m, 5m, 1m)", value="2h")
     
     col_d1, col_d2 = st.columns(2)
     with col_d1:
-        start_date = st.date_input("시작일", value=datetime.date.today() - datetime.timedelta(days=30))
+        start_date = st.date_input("시작일", value=datetime.date(2017, 1, 1))
     with col_d2:
         end_date = st.date_input("종료일", value=datetime.date.today())
         
