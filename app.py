@@ -204,7 +204,7 @@ class BBCustom(bt.Indicator):
         self.lines.bot[0] = bot
 
 # ==========================================
-# [메인 전략] 원본 PineScript 완전 통합형
+# [메인 전략] 파인스크립트(Partial Exit) 복제형
 # ==========================================
 class TestStrategy(bt.Strategy):
     params = (
@@ -247,7 +247,7 @@ class TestStrategy(bt.Strategy):
         ('tr_ma_type', optuna_trial.suggest_categorical('tr_ma_type', ['SMA', 'EMA', 'SMMA (RMA)', 'WMA', 'VWMA']) if 'optuna_trial' in globals() and optuna_trial else 'EMA'),
         ('tr_ma_length', optuna_trial.suggest_int('tr_ma_length', 50, 200) if 'optuna_trial' in globals() and optuna_trial else 100),
         ('exchange_decimal', optuna_trial.suggest_int('exchange_decimal', 0, 8) if 'optuna_trial' in globals() and optuna_trial else 3),
-        ('installment', optuna_trial.suggest_categorical('installment', [1, 2, 3, 4, 5]) if 'optuna_trial' in globals() and optuna_trial else 1),
+        ('installment', optuna_trial.suggest_categorical('installment', [1, 2]) if 'optuna_trial' in globals() and optuna_trial else 1),
     )
 
     def __init__(self):
@@ -262,21 +262,21 @@ class TestStrategy(bt.Strategy):
         self.bb = BBCustom(period=self.p.bb_length, dev=self.p.bb_dev, min_width=self.p.bb_min_width, matype=self.p.bb_ma_type)
         self.hott = HOTTIndicator(period=self.p.hott_h_length, length=self.p.hott_length, percent=self.p.hott_percent, use_high=self.p.hott_use_high, matype=self.p.hott_ma_type)
         self.tr_ma = UniversalMA(self.dataclose, period=self.p.tr_ma_length, matype=self.p.tr_ma_type)
-        self.tickets = []  
+        
+        self.inst_qty = 0 # 1분할 수량
         self.pending_orders = []
         self.pending_exits = []
 
     def notify_order(self, order):
         if order.status in [order.Submitted, order.Accepted]: return
         if order.status == order.Completed:
-            tinfo = getattr(order, 'ticket_info', None)
             if order.isbuy():
-                if tinfo:
-                    self.tickets.append({'type': tinfo['type'], 'price': order.executed.price, 'size': order.executed.size, 'inst_qty': tinfo.get('inst_qty', order.executed.size)})
+                # 진입 성공 시 1분할 수량 계산 (전량 / Installment)
+                self.inst_qty = order.executed.size / self.p.installment
             elif order.issell():
-                if tinfo and 'type' in tinfo and tinfo['type'] in ['Exit_HL', 'Exit_LL']:
-                    self.tickets = [t for t in self.tickets if t['type'] != tinfo['type'].split('_')[1]]
-                if not self.position: self.tickets.clear()
+                if not self.position:
+                    self.inst_qty = 0
+            
         self.pending_orders = [o for o in self.pending_orders if o.ref != order.ref]
         self.pending_exits = [o for o in self.pending_exits if o.ref != order.ref]
 
@@ -284,126 +284,78 @@ class TestStrategy(bt.Strategy):
         if self.p.use_date_range:
             dt = self.datas[0].datetime.datetime(0)
             if not (self.p.start_date <= dt < self.p.end_date): return
+            
         close_p = self.dataclose[0]
         safe_close = max(close_p, 0.000001)
         safe_cap = max(self.broker.getvalue(), 0)
+        
         lbbUpper = self.bb.lines.top[0]
         hott_val = self.hott.lines.hott[0]
         if self.p.high_int > 0 and len(self) > self.p.high_int: hott_val = self.hott.lines.hott[-self.p.high_int]
+        
         if self.p.hl_price == 'BB': hl_base = lbbUpper
         elif self.p.hl_price == 'H/L OTT': hl_base = hott_val
         elif self.p.hl_price == 'MAX': hl_base = max(hott_val, lbbUpper)
         else: hl_base = min(hott_val, lbbUpper)
+        
         hl_plot = hl_base
         ll_cond = self.ma2[0] * (1 - self.ma1[0] * self.p.ll_mult - self.p.entry_ll_per) if self.p.ll_volatility_filter else self.ma2[0] * (1 - self.p.entry_ll_per)
         ll_plot = ll_cond
-        has_pos = self.position.size > 0
-        pow10 = math.pow(10, self.p.exchange_decimal)
-        base_qty = safe_cap / safe_close
-        target_qty = base_qty
-        inst_qty_raw = math.ceil(base_qty / self.p.installment * pow10) / pow10
-        pending_buys = [o for o in self.pending_orders if o.isbuy()]
-        if not has_pos and target_qty > 0 and len(pending_buys) == 0:
+        
+        # 1. 진입 로직 (항상 100% 전량 진입)
+        if not self.position and len(self.pending_orders) == 0:
+            pow10 = math.pow(10, self.p.exchange_decimal)
+            qty_raw = math.floor((safe_cap / safe_close) * pow10) / pow10
+            
             if self.p.open_at_hl == 'limits' and close_p <= hl_plot:
-                is_lim = (self.p.exit_at_hl == 'limits')
-                ordId = self.buy(exectype=bt.Order.Stop, price=hl_plot, size=target_qty, transmit=not is_lim)
-                ordId.ticket_info = {'type': 'HL', 'inst_qty': inst_qty_raw}
-                self.pending_orders.append(ordId)
-                if is_lim:
-                    tp_f = hl_plot * (1 + self.p.tp_hl_per)
-                    tp_a = hl_plot + self.p.hl_tp_atr_mul * self.atr_tp[0]
-                    tp = tp_f if self.p.hl_tp_price == 'Fixed' else (tp_a if self.p.hl_tp_price == 'ATR' else max(tp_f, tp_a))
-                    sl_f = hl_plot * (1 - self.p.sl_hl_per)
-                    sl_a = hl_plot - self.p.hl_sl_atr_mul * self.atr_sl[0]
-                    sl = sl_f if self.p.hl_sl_price == 'Fixed' else (sl_a if self.p.hl_sl_price == 'ATR' else max(sl_f, sl_a))
-                    o_tp = self.sell(size=inst_qty_raw, exectype=bt.Order.Limit, price=tp, parent=ordId, transmit=False)
-                    o_sl = self.sell(size=inst_qty_raw, exectype=bt.Order.Stop, price=sl, parent=ordId, transmit=True, oco=o_tp)
-                    o_tp.ticket_info = {'type': 'Exit_HL'}
-                    o_sl.ticket_info = {'type': 'Exit_HL'}
-                    self.pending_exits.extend([o_tp, o_sl])
+                ord = self.buy(exectype=bt.Order.Stop, price=hl_plot, size=qty_raw)
+                self.pending_orders.append(ord)
             elif self.p.open_at_hl == 'close' and close_p > hl_plot:
-                ordId = self.buy(size=target_qty)
-                ordId.ticket_info = {'type': 'HL', 'inst_qty': inst_qty_raw}
-                self.pending_orders.append(ordId)
-            if self.p.open_at_ll == 'limits' and close_p >= ll_plot:
-                is_lim = (self.p.exit_at_ll == 'limits')
-                ordId = self.buy(exectype=bt.Order.Limit, price=ll_plot, size=target_qty, transmit=not is_lim)
-                ordId.ticket_info = {'type': 'LL', 'inst_qty': inst_qty_raw}
-                self.pending_orders.append(ordId)
-                if is_lim:
-                    tp = ll_plot * (1 + self.p.tp_ll_per)
-                    sl = ll_plot * (1 - self.p.sl_ll_per)
-                    o_tp = self.sell(size=inst_qty_raw, exectype=bt.Order.Limit, price=tp, parent=ordId, transmit=False)
-                    o_sl = self.sell(size=inst_qty_raw, exectype=bt.Order.Stop, price=sl, parent=ordId, transmit=True, oco=o_tp)
-                    o_tp.ticket_info = {'type': 'Exit_LL'}
-                    o_sl.ticket_info = {'type': 'Exit_LL'}
-                    self.pending_exits.extend([o_tp, o_sl])
+                ord = self.buy(size=qty_raw)
+                self.pending_orders.append(ord)
+            elif self.p.open_at_ll == 'limits' and close_p >= ll_plot:
+                ord = self.buy(exectype=bt.Order.Limit, price=ll_plot, size=qty_raw)
+                self.pending_orders.append(ord)
             elif self.p.open_at_ll == 'close' and close_p < ll_plot:
-                ordId = self.buy(size=target_qty)
-                ordId.ticket_info = {'type': 'LL', 'inst_qty': inst_qty_raw}
-                self.pending_orders.append(ordId)
-        active_exits_to_keep = []
-        for o in self.pending_exits:
-            if o.status not in [bt.Order.Completed, bt.Order.Canceled, bt.Order.Margin, bt.Order.Rejected]:
-                tinfo = getattr(o, 'ticket_info', {})
-                t_type = tinfo.get('type')
-                needs_update = False
-                if t_type == 'Exit_HL':
-                    if hasattr(o, 'parent') and o.parent and o.parent.status not in [bt.Order.Completed, bt.Order.Canceled]: needs_update = False 
-                    elif self.p.hl_tp_price != 'Fixed' or self.p.hl_sl_price != 'Fixed': needs_update = True
-                elif t_type == 'Exit_LL': needs_update = False
-                if needs_update: self.cancel(o)
-                else: active_exits_to_keep.append(o)
-        self.pending_exits = active_exits_to_keep
-        hl_tickets = [t for t in self.tickets if t['type'] == 'HL']
-        ll_tickets = [t for t in self.tickets if t['type'] == 'LL']
-        hl_sum = sum(t['size'] for t in hl_tickets)
-        ll_sum = sum(t['size'] for t in ll_tickets)
-        if hl_sum > 0:
-            ticket = hl_tickets[-1]
-            hl_qty = min(hl_sum, ticket.get('inst_qty', hl_sum))
-            tr_trigger = self.p.tr_hl and close_p < self.tr_ma[0] and self.dataclose[-1] >= self.tr_ma[-1]
-            if tr_trigger:
-                ordId = self.sell(size=hl_qty)
-                ordId.ticket_info = {'type': 'Exit_HL'}
-            else:
-                last_p = hl_tickets[-1]['price']
-                tp_f = last_p * (1 + self.p.tp_hl_per)
-                tp_a = last_p + self.p.hl_tp_atr_mul * self.atr_tp[0]
-                tp = tp_f if self.p.hl_tp_price == 'Fixed' else (tp_a if self.p.hl_tp_price == 'ATR' else max(tp_f, tp_a))
-                sl_f = last_p * (1 - self.p.sl_hl_per)
-                sl_a = last_p - self.p.hl_sl_atr_mul * self.atr_sl[0]
-                sl = sl_f if self.p.hl_sl_price == 'Fixed' else (sl_a if self.p.hl_sl_price == 'ATR' else max(sl_f, sl_a))
-                if self.p.exit_at_hl == 'limits':
-                    has_active = any(getattr(x, 'ticket_info', {}).get('type') == 'Exit_HL' for x in self.pending_exits)
-                    if not has_active:
-                        o_tp = self.sell(size=hl_qty, exectype=bt.Order.Limit, price=tp)
-                        o_sl = self.sell(size=hl_qty, exectype=bt.Order.Stop, price=sl, oco=o_tp)
-                        o_tp.ticket_info = {'type': 'Exit_HL'}
-                        o_sl.ticket_info = {'type': 'Exit_HL'}
-                        self.pending_exits.extend([o_tp, o_sl])
-                else:
-                    if close_p >= tp or close_p <= sl:
-                        ordId = self.sell(size=hl_qty)
-                        ordId.ticket_info = {'type': 'Exit_HL'}
-        if ll_sum > 0:
-            ticket = ll_tickets[-1]
-            ll_qty = min(ll_sum, ticket.get('inst_qty', ll_sum))
-            last_p = ticket['price']
-            tp = last_p * (1 + self.p.tp_ll_per)
-            sl = last_p * (1 - self.p.sl_ll_per)
-            if self.p.exit_at_ll == 'limits':
-                has_active = any(getattr(x, 'ticket_info', {}).get('type') == 'Exit_LL' for x in self.pending_exits)
-                if not has_active:
-                    o_tp = self.sell(size=ll_qty, exectype=bt.Order.Limit, price=tp)
-                    o_sl = self.sell(size=ll_qty, exectype=bt.Order.Stop, price=sl, oco=o_tp)
-                    o_tp.ticket_info = {'type': 'Exit_LL'}
-                    o_sl.ticket_info = {'type': 'Exit_LL'}
-                    self.pending_exits.extend([o_tp, o_sl])
-            else:
-                if close_p >= tp or close_p <= sl:
-                    ordId = self.sell(size=ll_qty)
-                    ordId.ticket_info = {'type': 'Exit_LL'}
+                ord = self.buy(size=qty_raw)
+                self.pending_orders.append(ord)
+
+        # 2. 청산 로직 (분할 매도 방식)
+        if self.position.size > 0:
+            # TP/SL 가격 계산 (최신 진입가 기준)
+            last_entry = self.position.price
+            
+            # HL 계열 익절/손경 (ATR/Fixed 선택)
+            tp_hl_f = last_entry * (1 + self.p.tp_hl_per)
+            tp_hl_a = last_entry + self.p.hl_tp_atr_mul * self.atr_tp[0]
+            tp_hl = tp_hl_f if self.p.hl_tp_price == 'Fixed' else (tp_hl_a if self.p.hl_tp_price == 'ATR' else max(tp_hl_f, tp_hl_a))
+            
+            sl_hl_f = last_entry * (1 - self.p.sl_hl_per)
+            sl_hl_a = last_entry - self.p.hl_sl_atr_mul * self.atr_sl[0]
+            sl_hl = sl_hl_f if self.p.hl_sl_price == 'Fixed' else (sl_hl_a if self.p.hl_sl_price == 'ATR' else max(sl_hl_f, sl_hl_a))
+            
+            # LL 계열 익절/손경 (Fixed 고정)
+            tp_ll = last_entry * (1 + self.p.tp_ll_per)
+            sl_ll = last_entry * (1 - self.p.sl_ll_per)
+            
+            # 청산 신호 체크
+            is_tp = False
+            is_sl = False
+            
+            # 현재 포지션이 HL인지 LL인지 구분하여 TP/SL 체크 (단순화를 위해 합집합 가능)
+            if close_p >= tp_hl or close_p >= tp_ll: is_tp = True
+            if close_p <= sl_hl or close_p <= sl_ll: is_sl = True
+            
+            # 분할 매도 실행 (신호 발생 봉마다 1/Installment 만큼 매도)
+            if is_tp or is_sl:
+                # 이번 봉에서 팔 수량 (전체의 1/N 또는 남은 전량)
+                sell_qty = min(self.inst_qty, self.position.size)
+                if sell_qty > 0:
+                    self.sell(size=sell_qty)
+            
+            # TR MA 추적 청산 (On 시 전량 청산)
+            if self.p.tr_hl and close_p < self.tr_ma[0] and self.dataclose[-1] >= self.tr_ma[-1]:
+                self.close()
 
 # ==========================================
 # 하단 실행부
