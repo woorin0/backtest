@@ -90,7 +90,7 @@ def run_optimization_task(self, exchange: str, symbol: str, timeframe: str, star
         
     return {"status": "SUCCESS", "study_name": study_name, "best_value": best_trial.value, "excel_file": file_path}
 
-@celery_app.task(bind=True, soft_time_limit=1500, time_limit=1800)
+@celery_app.task(bind=True)
 def run_optuna_worker(self, study_name: str, exchange: str, symbol: str, timeframe: str, start_date: str, end_date: str, limit: int, engine: str, code_str: str, n_trials: int):
     try:
         data = fetch_candles(exchange, symbol, timeframe, start_date, end_date, limit, progress_bar=None)
@@ -122,7 +122,7 @@ def run_optuna_worker(self, study_name: str, exchange: str, symbol: str, timefra
         return {"error": err_msg}
 
 
-@celery_app.task(bind=True, soft_time_limit=600, time_limit=900)
+@celery_app.task(bind=True)
 def finalize_optuna_study(self, worker_results, study_name: str, exchange: str, symbol: str, timeframe: str, start_date: str, end_date: str, limit: int, engine: str):
     try:
         # 엑셀 생성을 위한 데이터 로드 (타임아웃 및 재시도 고려)

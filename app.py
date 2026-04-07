@@ -528,7 +528,8 @@ if os.path.exists(CACHE_FILE):
         task_check = AsyncResult(meta["task_id"], app=celery_app)
         if not task_check.ready():
             active_task = meta
-            st.warning("🔄 접속 종료 또는 새로고침 되기 전 수신된 백그라운드 최적화 작업을 자동 복구(Re-attach)하여 추적합니다.")
+            # 깜빡임 방지를 위해 Recovery 모드 플래그만 설정
+            st.session_state["recovery_active"] = True
         else:
             os.remove(CACHE_FILE)
     except Exception:
@@ -600,79 +601,75 @@ if active_task:
     sym_meta = active_task.get("symbol", "BTC").replace('/', '-')
     engine_meta = active_task.get("engine", "Engine")
     
-    st.info(f"🚀 4개 코어 분산 백테스트 실행 중... (Callback ID: {task.id})")
-    
-    status_placeholder = st.empty()
-    gauge_placeholder = st.empty()
-    
-    # 중단 버튼 배치
-    if st.button("🛑 최적화 작업 강제 중단 (Cancel)", use_container_width=True):
-        # 1. 콜백 태스크 취소
-        celery_app.control.revoke(active_task["task_id"], terminate=True)
-        # 2. 개별 워커 태스크들 취소
-        worker_ids = active_task.get("worker_ids", [])
-        for wid in worker_ids:
-            celery_app.control.revoke(wid, terminate=True)
-            
-        if os.path.exists(CACHE_FILE):
-            os.remove(CACHE_FILE)
-            
-        send_discord_error(f"사용자에 의해 작업이 중단되었습니다.", pair=sym_meta, engine=engine_meta)
-        st.warning("🛑 최적화 작업이 사용자에 의해 중단되었습니다.")
-        st.rerun()
+    # 1. UI 고정 컨테이너 (깜빡임 방지)
+    status_box = st.container()
+    with status_box:
+        if st.session_state.get("recovery_active"):
+            st.warning("🔄 이전 세션에서 진행 중이던 최적화 작업을 복구하여 추적 중입니다.")
+        
+        st.info(f"🚀 4개 코어 병렬 분산 백테스트 실행 중... (ID: {task.id})")
+        
+        # 중단 버튼 (위치 고정)
+        if st.button("🛑 백테스트 즉시 중단 (Force Stop)", use_container_width=True):
+            celery_app.control.revoke(active_task["task_id"], terminate=True)
+            worker_ids = active_task.get("worker_ids", [])
+            for wid in worker_ids:
+                celery_app.control.revoke(wid, terminate=True)
+            if os.path.exists(CACHE_FILE):
+                os.remove(CACHE_FILE)
+            send_discord_error(f"사용자가 대시보드에서 작업을 강제 중단했습니다.", pair=sym_meta, engine=engine_meta)
+            st.warning("🛑 작업이 중단되었습니다. 메인 화면으로 돌아갑니다.")
+            time.sleep(1)
+            st.rerun()
+
+        st.divider()
+        status_placeholder = st.empty()
+        gauge_placeholder = st.empty()
     
     study_name = active_task["study_name"]
     redis_url = "redis://localhost:6379/1"
     storage = JournalStorage(JournalRedisStorage(redis_url))
     
-    # 폴링 루프 시작 시간
-    loop_start_time = time.time()
-    MAX_WAIT_TIME = 3600 # 1시간 타임아웃
+    # 루프 시작 전 타임리밋 설정 (1시간 -> 24시간 연장)
+    loop_start_at = time.time()
+    LIMIT_24H = 86400 # 24시간
     
-    with st.spinner("Celery 큐 대기 및 최적화 진행 중... (새로고침 하셔도 됩니다)"):
-        while True:
-            # 1. 태스크 상태 체크 (무한 로딩 및 대기 시간 가시화)
-            if task.ready():
-                break
-                
-            if task.status == 'PENDING':
-                status_placeholder.warning("⏳ 워커가 작업을 대기 중입니다... (Celery 워커가 실행 중인지 확인해 주세요)")
-
-            if task.status in ['FAILURE', 'REVOKED']:
-                st.error(f"⚠️ 백그라운드 작업이 비정상 종료되었습니다. (상태: {task.status})")
-                break
-
-            # 2. 루프 타임아웃 체크 (1시간 초과 시 알림 및 선택권 부여)
-            if time.time() - loop_start_time > MAX_WAIT_TIME:
-                status_placeholder.error("⚠️ 최적화 대기 시간이 1시간을 초구하였습니다. 계속 기다리시겠습니까?")
-                if st.button("🔄 1시간 더 기다리기"):
-                    loop_start_time = time.time()
-                    st.rerun()
-                break
+    # 최적화 진행률 추적 루프 (st.spinner 제거하여 깜빡임 방지)
+    while True:
+        if task.ready():
+            break
             
-            # 3. Redis Optuna 진행률 폴링 (개선 버전: PRUNED 포함)
-            try:
-                study = optuna.load_study(study_name=study_name, storage=storage)
-                # COMPLETE와 PRUNED(중단됨)을 모두 가져와서 진행률에 반영
-                all_trials = study.get_trials(states=[optuna.trial.TrialState.COMPLETE, optuna.trial.TrialState.PRUNED])
-                processed_count = len(all_trials)
-                
-                best_val = 0.0
-                if processed_count > 0:
-                    try:
-                        best_val = study.best_value
-                    except (ValueError, Exception):
-                        pass
-                
-                prog = min(int(processed_count / n_trials_meta * 100), 100)
-                gauge_placeholder.progress(prog, text=f"진행 상황: {processed_count} / {n_trials_meta} (완료 {len(study.get_trials(states=[optuna.trial.TrialState.COMPLETE]))}건)")
-                status_placeholder.markdown(f"### 🔥 현재까지 발견된 최고 수익률: **{best_val:.2f}%**")
-                
-            except Exception:
-                # Redis 연결 대기 혹은 DB 초기화 대기 시 보다 구체적인 정보 제공
-                status_placeholder.info("⏳ 데이터베이스 자원 연결 대기 중... (Redis 서버 실행 여부 확인 필요)")
+        # 1. 태스크 상태 모니터링
+        if task.status in ['FAILURE', 'REVOKED']:
+            st.error(f"⚠️ 백그라운드 작업이 비정상 종료되었습니다. (상태: {task.status})")
+            break
+
+        # 2. 24시간 타임리밋 체크
+        if time.time() - loop_start_at > LIMIT_24H:
+            status_placeholder.error("🚨 최적화 시간이 24시간을 경과하여 시스템 보호를 위해 추적을 중단합니다.")
+            break
             
-            time.sleep(3.0)
+        # 3. Redis 상태 감시 및 UI 업데이트
+        try:
+            study = optuna.load_study(study_name=study_name, storage=storage)
+            all_trials = study.get_trials(states=[optuna.trial.TrialState.COMPLETE, optuna.trial.TrialState.PRUNED])
+            processed = len(all_trials)
+            
+            best_val = 0.0
+            if processed > 0:
+                try:
+                    best_val = study.best_value
+                except:
+                    pass
+            
+            prog = min(int(processed / n_trials_meta * 100), 100)
+            gauge_placeholder.progress(prog, text=f"진행 상황: {processed} / {n_trials_meta} 탐색 중...")
+            status_placeholder.markdown(f"### 🔥 현재 찾아낸 최고 수익률: **{best_val:.2f}%**")
+            
+        except Exception:
+            status_placeholder.info("⏳ 워커가 Redis DB와 연결 중이거나 초기화 대기 중입니다...")
+        
+        time.sleep(3.0)
             
     # 최종 결과 반환 및 에러 리포팅 강화
     try:
