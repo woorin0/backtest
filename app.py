@@ -12,10 +12,10 @@ try:
     from optuna.storages import JournalRedisStorage
 except ImportError:
     from optuna_integration.storages import JournalRedisStorage
-from celery.result import AsyncResult
-
-from core.tasks import run_optuna_worker, finalize_optuna_study, celery_app
+from celery.result import AsyncResult, GroupResult
 from celery import chord
+from core.tasks import run_optuna_worker, finalize_optuna_study, celery_app
+from core.notifier import send_discord_error
 
 # 환경 변수 로드
 load_dotenv()
@@ -574,9 +574,13 @@ if start_btn and not active_task:
     # 4. Chord 실행
     result = chord(header)(callback)
     
-    # 프로세스 캐시 저장 (result.id는 callback 태스크의 ID임)
+    # 헤더(워커)들의 ID 추출
+    worker_ids = [h.id for h in header]
+    
+    # 프로세스 캐시 저장
     active_task = {
         "task_id": result.id, 
+        "worker_ids": worker_ids,
         "study_name": study_name,
         "n_trials": n_trials,
         "exchange": exchange,
@@ -601,6 +605,22 @@ if active_task:
     status_placeholder = st.empty()
     gauge_placeholder = st.empty()
     
+    # 중단 버튼 배치
+    if st.button("🛑 최적화 작업 강제 중단 (Cancel)", use_container_width=True):
+        # 1. 콜백 태스크 취소
+        celery_app.control.revoke(active_task["task_id"], terminate=True)
+        # 2. 개별 워커 태스크들 취소
+        worker_ids = active_task.get("worker_ids", [])
+        for wid in worker_ids:
+            celery_app.control.revoke(wid, terminate=True)
+            
+        if os.path.exists(CACHE_FILE):
+            os.remove(CACHE_FILE)
+            
+        send_discord_error(f"사용자에 의해 작업이 중단되었습니다.", pair=sym_meta, engine=engine_meta)
+        st.warning("🛑 최적화 작업이 사용자에 의해 중단되었습니다.")
+        st.rerun()
+    
     study_name = active_task["study_name"]
     redis_url = "redis://localhost:6379/1"
     storage = JournalStorage(JournalRedisStorage(redis_url))
@@ -622,9 +642,12 @@ if active_task:
                 st.error(f"⚠️ 백그라운드 작업이 비정상 종료되었습니다. (상태: {task.status})")
                 break
 
-            # 2. 루프 타임아웃 체크
+            # 2. 루프 타임아웃 체크 (1시간 초과 시 알림 및 선택권 부여)
             if time.time() - loop_start_time > MAX_WAIT_TIME:
-                st.error("⚠️ 최적화 작업 허용 시간(1시간)을 초과하여 추적을 중단합니다.")
+                status_placeholder.error("⚠️ 최적화 대기 시간이 1시간을 초구하였습니다. 계속 기다리시겠습니까?")
+                if st.button("🔄 1시간 더 기다리기"):
+                    loop_start_time = time.time()
+                    st.rerun()
                 break
             
             # 3. Redis Optuna 진행률 폴링 (개선 버전: PRUNED 포함)
@@ -681,4 +704,7 @@ if active_task:
                 )
     else:
         gauge_placeholder.empty()
-        st.error(f"작업 실패 또는 에러 발생: {final_res}")
+        err_msg = f"작업 실패 또는 에러 발생: {final_res}"
+        st.error(err_msg)
+        # 디스코드 에러 알림 (이미 tasks.py에서 보냈을 수 있지만, 여기서도 한 번 더 확인)
+        send_discord_error(str(final_res), pair=sym_meta, engine=engine_meta)
