@@ -146,13 +146,17 @@ class HOTTIndicator(bt.Indicator):
     params = (('period', 100), ('length', 2), ('percent', 0.6), ('use_high', False), ('matype', 'EMA'))
 
     def __init__(self):
+        # High_src == 'High' ? high : close
         src_data = self.data.high if self.p.use_high else self.data.close
+        # src = ta.highest(High_plot, hllength)
         self.highest_val = bt.indicators.Highest(src_data, period=self.p.period)
+        # MAvg = ma(src, length, MAvg_type)
         self.mavg = UniversalMA(self.highest_val, period=self.p.length, matype=self.p.matype)
         self.addminperiod(self.p.period + self.p.length)
         
     def next(self):
         mavg = self.mavg[0]
+        # fark = MAvg * percent * 0.01
         fark = mavg * self.p.percent * 0.01
         
         longStop = mavg - fark
@@ -163,17 +167,22 @@ class HOTTIndicator(bt.Indicator):
             self.shortStopPrev = shortStop
             self.dir = 1
             
+        # longStop := not na(MAvg) and MAvg > longStopPrev ? math.max(longStop, longStopPrev) : longStop
         if mavg > self.longStopPrev:
             longStop = max(longStop, self.longStopPrev)
+        # shortStop := not na(MAvg) and MAvg < shortStopPrev ? math.min(shortStop, shortStopPrev) : shortStop
         if mavg < self.shortStopPrev:
             shortStop = min(shortStop, self.shortStopPrev)
             
+        # dir := dir == -1 and MAvg > shortStopPrev ? 1 : dir == 1 and MAvg < longStopPrev ? -1 : dir
         if self.dir == -1 and mavg > self.shortStopPrev:
             self.dir = 1
         elif self.dir == 1 and mavg < self.longStopPrev:
             self.dir = -1
             
+        # MT = dir == 1 ? longStop : shortStop
         mt = longStop if self.dir == 1 else shortStop
+        # HOTT = MAvg > MT ? MT * (200 + percent) / 200 : MT * (200 - percent) / 200
         hott = mt * (200 + self.p.percent) / 200 if mavg > mt else mt * (200 - self.p.percent) / 200
         
         self.lines.hott[0] = hott
@@ -193,8 +202,10 @@ class BBCustom(bt.Indicator):
         
     def next(self):
         mid = self.mid_ma[0]
+        # lbbdev = lbbDevInput * ta.stdev(close, ma3_length)
         std = self.stddev[0] * self.p.dev
         
+        # lbbdev := math.max(nz(lbbdev), nz(lbbMiddle) * lbbMinWidth / 100)
         lbbdev = max(std, mid * self.p.min_width / 100.0)
         top = mid + lbbdev
         bot = mid - lbbdev
@@ -204,7 +215,7 @@ class BBCustom(bt.Indicator):
         self.lines.bot[0] = bot
 
 # ==========================================
-# [메인 전략] 파인스크립트(Partial Exit) 복제형
+# [메인 전략] 파인스크립트(Dual Long) 복제형
 # ==========================================
 class TestStrategy(bt.Strategy):
     params = (
@@ -253,110 +264,175 @@ class TestStrategy(bt.Strategy):
         self.dataclose = self.datas[0].close
         self.datahigh = self.datas[0].high
         self.datalow = self.datas[0].low
+        
         self.atr_tp = bt.indicators.ATR(self.datas[0], period=self.p.atr_length)
         self.atr_sl = bt.indicators.ATR(self.datas[0], period=self.p.atr_length2)
-        vol_src = (self.datahigh - self.datalow) / bt.If(self.dataclose > 0, self.dataclose, 0.000001)
+        
+        # ma1 = ta.sma((high - low) / safeClose_ma1, ma1_length)
+        safe_close = bt.If(self.dataclose > 0, self.dataclose, 0.000001)
+        vol_src = (self.datahigh - self.datalow) / safe_close
         self.ma1 = bt.indicators.SMA(vol_src, period=self.p.ma1_length)
+        
         self.ma2 = UniversalMA(self.dataclose, period=self.p.ma2_length, matype=self.p.ma2_type)
         self.bb = BBCustom(period=self.p.bb_length, dev=self.p.bb_dev, min_width=self.p.bb_min_width, matype=self.p.bb_ma_type)
         self.hott = HOTTIndicator(period=self.p.hott_h_length, length=self.p.hott_length, percent=self.p.hott_percent, use_high=self.p.hott_use_high, matype=self.p.hott_ma_type)
         self.tr_ma = UniversalMA(self.dataclose, period=self.p.tr_ma_length, matype=self.p.tr_ma_type)
         
         self.entry_id = None # 'HL' or 'LL'
-        self.inst_qty = 0 # 1분할 수량
-        self.pending_orders = []
+        self.hl_entry_installment_qty = None 
+        
+        self.entry_order = None
+        self.tp_order = None
+        self.sl_order = None
+        self.is_first_filled = False
+
+    def issue_exit_orders(self, base_price, size):
+        """익절(Limit) 및 손절(Stop) OCO 주문 생성"""
+        tp_price = None
+        sl_price = None
+        
+        if self.entry_id == 'HL':
+            tp_f = base_price * (1 + self.p.tp_hl_per)
+            tp_a = base_price + self.p.hl_tp_atr_mul * self.atr_tp[0]
+            tp_price = tp_f if self.p.hl_tp_price == 'Fixed' else (tp_a if self.p.hl_tp_price == 'ATR' else max(tp_f, tp_a))
+            
+            sl_f = base_price * (1 - self.p.sl_hl_per)
+            sl_a = base_price - self.p.hl_sl_atr_mul * self.atr_sl[0]
+            sl_price = sl_f if self.p.hl_sl_price == 'Fixed' else (sl_a if self.p.hl_sl_price == 'ATR' else max(sl_f, sl_a))
+        else: # LL
+            tp_price = base_price * (1 + self.p.tp_ll_per)
+            sl_price = base_price * (1 - self.p.sl_ll_per)
+
+        if tp_price and sl_price and size > 0:
+            # OCO 주문 발행 (익절과 손절 중 하나가 체결되면 다른 하나는 자동 취소됨)
+            self.tp_order = self.sell(exectype=bt.Order.Limit, price=tp_price, size=size)
+            self.sl_order = self.sell(exectype=bt.Order.Stop, price=sl_price, size=size, oco=self.tp_order)
+
+    def cancel_all_orders(self):
+        """모든 대기 주문 취소"""
+        if self.entry_order:
+            self.cancel(self.entry_order)
+            self.entry_order = None
+        if self.tp_order:
+            self.cancel(self.tp_order)
+            self.tp_order = None
+        if self.sl_order:
+            self.cancel(self.sl_order)
+            self.sl_order = None
 
     def notify_order(self, order):
-        if order.status in [order.Submitted, order.Accepted]: return
+        if order.status in [order.Submitted, order.Accepted]:
+            return
+            
         if order.status == order.Completed:
             if order.isbuy():
-                # 진입 성공 시 ID 기록 및 수량 계산
-                self.entry_id = order.info.get('id', 'HL')
+                self.entry_order = None
+                self.entry_id = order.info.get('id')
                 pow10 = math.pow(10, self.p.exchange_decimal)
-                self.inst_qty = math.ceil((order.executed.size / self.p.installment) * pow10) / pow10
+                self.hl_entry_installment_qty = math.ceil((order.executed.size / self.p.installment) * pow10) / pow10
+                
+                # 진입 즉시 1분할 수량에 대한 OCO 익손절 주문 실행 (Standing Orders)
+                self.issue_exit_orders(order.executed.price, self.hl_entry_installment_qty)
+                
             elif order.issell():
-                if not self.position:
+                self.tp_order = None
+                self.sl_order = None
+                if self.position.size > 0:
+                    # 1분할만 체결된 상태 -> 플래그 설정 (다음 봉에서 나머지 처리)
+                    self.is_first_filled = True
+                else:
+                    # 전량 체결 및 종료
                     self.entry_id = None
-                    self.inst_qty = 0
+                    self.hl_entry_installment_qty = None
+                    self.is_first_filled = False
             
-        self.pending_orders = [o for o in self.pending_orders if o.ref != order.ref]
+        elif order.status in [order.Canceled, order.Margin, order.Rejected]:
+            if order == self.entry_order: self.entry_order = None
+            elif order == self.tp_order: self.tp_order = None
+            elif order == self.sl_order: self.sl_order = None
 
     def next(self):
         if self.p.use_date_range:
             dt = self.datas[0].datetime.datetime(0)
-            if not (self.p.start_date <= dt < self.p.end_date): return
+            if not (self.p.start_date <= dt < self.p.end_date):
+                return
             
         close_p = self.dataclose[0]
         safe_close = max(close_p, 0.000001)
+        # sumcapital = initial_capital + netprofit
         safe_cap = max(self.broker.getvalue(), 0)
         
+        # 지표 값 추출
         lbbUpper = self.bb.lines.top[0]
         hott_val = self.hott.lines.hott[0]
-        if self.p.high_int > 0 and len(self) > self.p.high_int: hott_val = self.hott.lines.hott[-self.p.high_int]
+        if self.p.high_int > 0 and len(self) > self.p.high_int:
+            hott_val = self.hott.lines.hott[-self.p.high_int]
+        hott_plot = hott_val
         
-        if self.p.hl_price == 'BB': hl_base = lbbUpper
-        elif self.p.hl_price == 'H/L OTT': hl_base = hott_val
-        elif self.p.hl_price == 'MAX': hl_base = max(hott_val, lbbUpper)
-        else: hl_base = min(hott_val, lbbUpper)
-        
-        hl_plot = hl_base
-        ll_cond = self.ma2[0] * (1 - self.ma1[0] * self.p.ll_mult - self.p.entry_ll_per) if self.p.ll_volatility_filter else self.ma2[0] * (1 - self.p.entry_ll_per)
-        ll_plot = ll_cond
-        
-        # 1. 진입 로직
-        if not self.position and len(self.pending_orders) == 0:
-            pow10 = math.pow(10, self.p.exchange_decimal)
-            qty_raw = math.floor((safe_cap / safe_close) * pow10) / pow10
+        # HLPlot 계산
+        if self.p.hl_price == 'BB':
+            hl_plot = lbbUpper
+        elif self.p.hl_price == 'H/L OTT':
+            hl_plot = hott_plot
+        elif self.p.hl_price == 'MAX':
+            hl_plot = max(hott_plot, lbbUpper)
+        else:
+            hl_plot = hott_plot # 기본값
             
-            if self.p.open_at_hl == 'limits' and close_p <= hl_plot:
-                ord = self.buy(exectype=bt.Order.Stop, price=hl_plot, size=qty_raw)
-                ord.info['id'] = 'HL'
-                self.pending_orders.append(ord)
-            elif self.p.open_at_hl == 'close' and close_p > hl_plot:
-                ord = self.buy(size=qty_raw)
-                ord.info['id'] = 'HL'
-                self.pending_orders.append(ord)
-            elif self.p.open_at_ll == 'limits' and close_p >= ll_plot:
-                ord = self.buy(exectype=bt.Order.Limit, price=ll_plot, size=qty_raw)
-                ord.info['id'] = 'LL'
-                self.pending_orders.append(ord)
-            elif self.p.open_at_ll == 'close' and close_p < ll_plot:
-                ord = self.buy(size=qty_raw)
-                ord.info['id'] = 'LL'
-                self.pending_orders.append(ord)
+        # LLPlot 계산 (Volatility Filter)
+        entry_ll = self.p.entry_ll_per # Pine Script toFrac is handled by input or logic
+        if self.p.ll_volatility_filter:
+            ll_plot = self.ma2[0] * (1 - self.ma1[0] * self.p.ll_mult - entry_ll)
+        else:
+            ll_plot = self.ma2[0] * (1 - entry_ll)
+            
+        # 히스토리 체크
+        h_enough = len(self) > max(100, self.p.bb_length) # Pine: bar_index > math.max(hllength, ma3_length)
+        l_enough = len(self) > self.p.ma2_length
+        
+        # 1. 진입 (Entry) - Cancel & Replace 엔진
+        if not self.position:
+            # 매 봉 시작 시 미체결 매수 주문 취소 (기준선 갱신을 위함)
+            if self.entry_order:
+                self.cancel(self.entry_order)
+                self.entry_order = None
 
-        # 2. 청산 로직 (분할 매도 방식)
-        if self.position.size > 0 and self.entry_id:
-            last_entry = self.position.price
-            sell_qty = min(self.inst_qty, self.position.size)
+            pow10 = math.pow(10, self.p.exchange_decimal)
+            qty_hl = round((safe_cap / safe_close) * pow10) / pow10
             
-            if self.entry_id == 'HL':
-                tp_f = last_entry * (1 + self.p.tp_hl_per)
-                tp_a = last_entry + self.p.hl_tp_atr_mul * self.atr_tp[0]
-                tp = tp_f if self.p.hl_tp_price == 'Fixed' else (tp_a if self.p.hl_tp_price == 'ATR' else max(tp_f, tp_a))
-                
-                sl_f = last_entry * (1 - self.p.sl_hl_per)
-                sl_a = last_entry - self.p.hl_sl_atr_mul * self.atr_sl[0]
-                sl = sl_f if self.p.hl_sl_price == 'Fixed' else (sl_a if self.p.hl_sl_price == 'ATR' else max(sl_f, sl_a))
-                
-                if self.p.exit_at_hl == 'limits':
-                    if self.datahigh[0] >= tp: self.sell(size=sell_qty, price=tp, exectype=bt.Order.Limit)
-                    elif self.datalow[0] <= sl: self.sell(size=sell_qty, price=sl, exectype=bt.Order.Stop)
-                else: # 'close'
-                    if close_p >= tp or close_p <= sl: self.sell(size=sell_qty)
-                    
-            elif self.entry_id == 'LL':
-                tp = last_entry * (1 + self.p.tp_ll_per)
-                sl = last_entry * (1 - self.p.sl_ll_per)
-                
-                if self.p.exit_at_ll == 'limits':
-                    if self.datahigh[0] >= tp: self.sell(size=sell_qty, price=tp, exectype=bt.Order.Limit)
-                    elif self.datalow[0] <= sl: self.sell(size=sell_qty, price=sl, exectype=bt.Order.Stop)
-                else: # 'close'
-                    if close_p >= tp or close_p <= sl: self.sell(size=sell_qty)
+            # HL Entry
+            if qty_hl > 0 and h_enough:
+                if self.p.open_at_hl == 'limits' and hl_plot > 0:
+                    # 실시간 갱신되는 HLPlot 가격으로 Stop 주문 (예약가 매수)
+                    self.entry_order = self.buy(exectype=bt.Order.Stop, price=hl_plot, size=qty_hl)
+                    self.entry_order.info['id'] = 'HL'
+                elif self.p.open_at_hl == 'close' and close_p > hl_plot and hl_plot > 0:
+                    self.entry_order = self.buy(size=qty_hl)
+                    self.entry_order.info['id'] = 'HL'
             
-            # TR MA 추적 청산
+            # LL Entry (HL이 안 나갔을 때만)
+            if not self.entry_order and l_enough:
+                qty_ll = round((safe_cap / safe_close) * pow10) / pow10
+                if qty_ll > 0:
+                    if self.p.open_at_ll == 'limits' and ll_plot > 0:
+                        self.entry_order = self.buy(exectype=bt.Order.Limit, price=ll_plot, size=qty_ll)
+                        self.entry_order.info['id'] = 'LL'
+                    elif self.p.open_at_ll == 'close' and close_p < ll_plot and ll_plot > 0:
+                        self.entry_order = self.buy(size=qty_ll)
+                        self.entry_order.info['id'] = 'LL'
+
+        # 2. 청산 (Exit) - Sequential Installment 엔진
+        if self.position.size > 0:
+            # 순차적 분할 매도: 1차 매도가 체결된 바(Bar)의 다음 봉에서 나머지 주문 생성
+            if self.is_first_filled and not self.tp_order and not self.sl_order:
+                # 나머지 전량(보통 50%)에 대한 OCO 익손절 주문 새로 발행
+                last_entry = self.position.price
+                self.issue_exit_orders(last_entry, self.position.size)
+                self.is_first_filled = False # 플래그 초기화
+
+            # TR MA 추적 청산 (Trend Exit)
             if self.p.tr_hl and close_p < self.tr_ma[0] and self.dataclose[-1] >= self.tr_ma[-1]:
+                self.cancel_all_orders()
                 self.close()
 
 # ==========================================
@@ -535,10 +611,13 @@ if active_task:
     
     with st.spinner("Celery 큐 대기 및 최적화 진행 중... (새로고침 하셔도 됩니다)"):
         while True:
-            # 1. 태스크 상태 체크 (무한 로딩 방지 핵심)
+            # 1. 태스크 상태 체크 (무한 로딩 및 대기 시간 가시화)
             if task.ready():
                 break
                 
+            if task.status == 'PENDING':
+                status_placeholder.warning("⏳ 워커가 작업을 대기 중입니다... (Celery 워커가 실행 중인지 확인해 주세요)")
+
             if task.status in ['FAILURE', 'REVOKED']:
                 st.error(f"⚠️ 백그라운드 작업이 비정상 종료되었습니다. (상태: {task.status})")
                 break
@@ -548,35 +627,35 @@ if active_task:
                 st.error("⚠️ 최적화 작업 허용 시간(1시간)을 초과하여 추적을 중단합니다.")
                 break
             
-            # 3. Redis Optuna 진행률 폴링 (최적화 버전)
+            # 3. Redis Optuna 진행률 폴링 (개선 버전: PRUNED 포함)
             try:
                 study = optuna.load_study(study_name=study_name, storage=storage)
-                # study.trials 전체를 가져오지 않고 필터링된 개수만 확인하여 속도 향상
-                completed_trials = study.get_trials(states=[optuna.trial.TrialState.COMPLETE])
-                completed = len(completed_trials)
+                # COMPLETE와 PRUNED(중단됨)을 모두 가져와서 진행률에 반영
+                all_trials = study.get_trials(states=[optuna.trial.TrialState.COMPLETE, optuna.trial.TrialState.PRUNED])
+                processed_count = len(all_trials)
                 
                 best_val = 0.0
-                if completed > 0:
+                if processed_count > 0:
                     try:
                         best_val = study.best_value
                     except (ValueError, Exception):
                         pass
                 
-                prog = min(int(completed / n_trials_meta * 100), 100)
-                gauge_placeholder.progress(prog, text=f"완료 횟수: {completed} / {n_trials_meta}")
-                status_placeholder.markdown(f"### 🔥 현재 찾아낸 최고 수익률: **{best_val:.2f}%**")
+                prog = min(int(processed_count / n_trials_meta * 100), 100)
+                gauge_placeholder.progress(prog, text=f"진행 상황: {processed_count} / {n_trials_meta} (완료 {len(study.get_trials(states=[optuna.trial.TrialState.COMPLETE]))}건)")
+                status_placeholder.markdown(f"### 🔥 현재까지 발견된 최고 수익률: **{best_val:.2f}%**")
                 
-            except Exception as e:
-                # study가 아직 생성되지 않았거나 Redis 연결 지연 시 예외 처리
-                status_placeholder.markdown("⏳ Optuna 데이터베이스 초기화 및 동기화 대기 중...")
+            except Exception:
+                # Redis 연결 대기 혹은 DB 초기화 대기 시 보다 구체적인 정보 제공
+                status_placeholder.info("⏳ 데이터베이스 자원 연결 대기 중... (Redis 서버 실행 여부 확인 필요)")
             
             time.sleep(3.0)
             
-    # 최종 결과 반환
+    # 최종 결과 반환 및 에러 리포팅 강화
     try:
-        final_res = task.get()
+        final_res = task.get(timeout=10) # Safety timeout
     except Exception as e:
-        final_res = {"status": "FAILED", "reason": f"Celery 작업 중단 및 예외 발생: {str(e)}"}
+        final_res = {"status": "FAILED", "reason": f"Celery 결과 수신 실패 (타임아웃 또는 예외): {str(e)}"}
     
     # 작업이 끝났으므로 캐시 삭제
     if os.path.exists(CACHE_FILE):

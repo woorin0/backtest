@@ -123,9 +123,9 @@ def finalize_optuna_study(self, worker_results, study_name: str, exchange: str, 
     try:
         data = fetch_candles(exchange, symbol, timeframe, start_date, end_date, limit, progress_bar=None)
         if data is None or data.empty:
-            return {"status": "FAILED", "reason": "최종 결과 수집을 위한 데이터 로드 실패"}
+            return {"status": "FAILED", "reason": f"최종 결과 수집을 위한 데이터 로드 실패 ({exchange} {symbol} {timeframe}) - 거래소 응답이 없거나 데이터가 비어 있습니다."}
     except Exception as e:
-        return {"status": "FAILED", "reason": f"데이터 수신 중 오류 발생: {str(e)}"}
+        return {"status": "FAILED", "reason": f"데이터 수신 중 치명적 오류 발생: {str(e)}"}
     
     redis_url = "redis://localhost:6379/1"
     storage = JournalStorage(JournalRedisStorage(redis_url))
