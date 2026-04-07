@@ -287,7 +287,7 @@ class TestStrategy(bt.Strategy):
         self.is_first_filled = False
 
     def issue_exit_orders(self, base_price, size):
-        """익절(Limit) 및 손절(Stop) OCO 주문 생성"""
+        # 익절(Limit) 및 손절(Stop) OCO 주문 생성
         tp_price = None
         sl_price = None
         
@@ -309,7 +309,7 @@ class TestStrategy(bt.Strategy):
             self.sl_order = self.sell(exectype=bt.Order.Stop, price=sl_price, size=size, oco=self.tp_order)
 
     def cancel_all_orders(self):
-        """모든 대기 주문 취소"""
+        # 모든 대기 주문 취소
         if self.entry_order:
             self.cancel(self.entry_order)
             self.entry_order = None
