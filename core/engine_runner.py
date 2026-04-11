@@ -3,13 +3,13 @@ import pandas as pd
 import sys
 import io
 
-def run_backtrader(code_str: str, data: pd.DataFrame, optuna_trial=None):
-    """Backtrader를 이용한 동적 백테스트 실행"""
-    local_env = {'optuna_trial': optuna_trial, 'data': data}
+def run_backtrader(code_str: str, data: pd.DataFrame, optuna_trial=None, external_params: dict = None):
+    """Backtrader를 이용한 동적 백테스트 실행 (Hyper-Speed 최적화 버전)"""
+    # external_params가 있으면 suggest 로직 대신 직접 주입된 값을 사용하여 컴파일 오버헤드 방지
+    local_env = {'optuna_trial': optuna_trial, 'data': data, 'external_params': external_params}
     
-    # 1. 런타임 코드 실행 (보안 샌드박스 없음 - 개인 로컬 구동용)
     try:
-        # Optuna 변수를 globals 레벨로 넘겨야 클래스 정의 내부에서 인식 가능합니다.
+        # 1. 컴파일 오버헤드 최소화를 위한 exec 환경 설정
         exec_globals = globals().copy()
         exec_globals.update(local_env)
         exec(code_str, exec_globals)
@@ -22,50 +22,48 @@ def run_backtrader(code_str: str, data: pd.DataFrame, optuna_trial=None):
         if not strategy_class:
             return False, "전략 코드에 'TestStrategy' 이름의 클래스가 정의되지 않았습니다."
             
-        cerebro = bt.Cerebro()
-        cerebro.addstrategy(strategy_class)
+        cerebro = bt.Cerebro(stdstats=False) # 표준 통계(Broker 등) 시각화 비활성으로 가속
         
-        # DataFrame 컨버팅
+        # 파라미터 주입 최적화
+        if external_params:
+            cerebro.addstrategy(strategy_class, **external_params)
+        else:
+            cerebro.addstrategy(strategy_class)
+        
         data_feed = bt.feeds.PandasData(dataname=data)
         cerebro.adddata(data_feed)
         
         cerebro.broker.setcash(10000.0)
-        cerebro.broker.setcommission(commission=0.001) # 0.1% 커미션
+        cerebro.broker.setcommission(commission=0.001)
         
-        # 결과 분석을 위한 Analyzer 추가
         cerebro.addanalyzer(bt.analyzers.DrawDown, _name='drawdown')
-        cerebro.addanalyzer(bt.analyzers.Returns, _name='returns')
         cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name='trades')
         
-        # 스탠다드 아웃풋 리다이렉션 방지 (cerebro.run에 의한 stdout 방지용 등)
-        results = cerebro.run()
+        # 엔진 최종 가속 플래그
+        results = cerebro.run(runonce=True, preload=True, runstds=False, exactbars=False)
         if not results:
-            return False, "비정상적인 실행 (원인 불명)"
+            return False, "연산 실패"
             
         strat = results[0]
-        
-        # 메트릭 파싱
         final_value = cerebro.broker.getvalue()
         dd_anlz = strat.analyzers.drawdown.get_analysis()
         trades_anlz = strat.analyzers.trades.get_analysis()
         
-        tot_return = (final_value - 10000.0) / 10000.0 * 100
+        tot_return = (final_value - 10000.0) / 100.0 # 10000 기준 (%)
         max_dd = dd_anlz.max.drawdown if 'max' in dd_anlz else 0.0
-        
         total_trades = trades_anlz.total.closed if hasattr(trades_anlz, 'total') and hasattr(trades_anlz.total, 'closed') else 0
         
-        if total_trades > 0 and hasattr(trades_anlz, 'won') and hasattr(trades_anlz.won, 'total'):
+        win_rate = 0.0
+        if total_trades > 0 and hasattr(trades_anlz, 'won'):
             win_rate = (trades_anlz.won.total / total_trades) * 100
-        else:
-            win_rate = 0.0
             
         metrics = {
             "Total Return (%)": round(tot_return, 2),
             "Win Rate (%)": round(win_rate, 2),
             "Max Drawdown (%)": round(max_dd, 2),
-            "Total Trades": total_trades
+            "Total Trades": total_trades,
+            "Total Profit": round(final_value - 10000.0, 2)
         }
-        
         return True, metrics
 
     except Exception as e:

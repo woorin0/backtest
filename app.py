@@ -261,22 +261,35 @@ class TestStrategy(bt.Strategy):
     )
 
     def __init__(self):
+        # 데이터 핸들
         self.dataclose = self.datas[0].close
         self.datahigh = self.datas[0].high
         self.datalow = self.datas[0].low
         
-        self.atr_tp = bt.indicators.ATR(self.datas[0], period=self.p.atr_length)
-        self.atr_sl = bt.indicators.ATR(self.datas[0], period=self.p.atr_length2)
+        # 지표 생성 (벡터화 가속 지원: DF에 이미 계산된 컬럼이 있으면 사용)
+        def get_ind(name, ind_func, *args, **kwargs):
+            if hasattr(self.datas[0], name):
+                return getattr(self.datas[0], name)
+            return ind_func(*args, **kwargs)
+
+        self.atr_tp = get_ind('atr_tp', bt.indicators.ATR, self.datas[0], period=self.p.atr_length)
+        self.atr_sl = get_ind('atr_sl', bt.indicators.ATR, self.datas[0], period=self.p.atr_length2)
         
-        # ma1 = ta.sma((high - low) / safeClose_ma1, ma1_length)
-        safe_close = bt.If(self.dataclose > 0, self.dataclose, 0.000001)
-        vol_src = (self.datahigh - self.datalow) / safe_close
-        self.ma1 = bt.indicators.SMA(vol_src, period=self.p.ma1_length)
+        # ma1 연산
+        if hasattr(self.datas[0], 'ma1'):
+            self.ma1 = self.datas[0].ma1
+        else:
+            safe_close = bt.If(self.dataclose > 0, self.dataclose, 0.000001)
+            vol_src = (self.datahigh - self.datalow) / safe_close
+            self.ma1 = bt.indicators.SMA(vol_src, period=self.p.ma1_length)
         
-        self.ma2 = UniversalMA(self.dataclose, period=self.p.ma2_length, matype=self.p.ma2_type)
+        self.ma2 = get_ind('ma2', UniversalMA, self.dataclose, period=self.p.ma2_length, matype=self.p.ma2_type)
         self.bb = BBCustom(period=self.p.bb_length, dev=self.p.bb_dev, min_width=self.p.bb_min_width, matype=self.p.bb_ma_type)
         self.hott = HOTTIndicator(period=self.p.hott_h_length, length=self.p.hott_length, percent=self.p.hott_percent, use_high=self.p.hott_use_high, matype=self.p.hott_ma_type)
-        self.tr_ma = UniversalMA(self.dataclose, period=self.p.tr_ma_length, matype=self.p.tr_ma_type)
+        self.tr_ma = get_ind('tr_ma', UniversalMA, self.dataclose, period=self.p.tr_ma_length, matype=self.p.tr_ma_type)
+        
+        # 성능 최적화: 매 봉마다 계산하지 않도록 미리 계산
+        self.pow10 = math.pow(10, self.p.exchange_decimal)
         
         self.entry_id = None # 'HL' or 'LL'
         self.hl_entry_installment_qty = None 
@@ -328,8 +341,8 @@ class TestStrategy(bt.Strategy):
             if order.isbuy():
                 self.entry_order = None
                 self.entry_id = order.info.get('id')
-                pow10 = math.pow(10, self.p.exchange_decimal)
-                self.hl_entry_installment_qty = math.ceil((order.executed.size / self.p.installment) * pow10) / pow10
+                # 미리 계산된 pow10 사용
+                self.hl_entry_installment_qty = math.ceil((order.executed.size / self.p.installment) * self.pow10) / self.pow10
                 
                 # 진입 즉시 1분할 수량에 대한 OCO 익손절 주문 실행 (Standing Orders)
                 self.issue_exit_orders(order.executed.price, self.hl_entry_installment_qty)
@@ -397,8 +410,8 @@ class TestStrategy(bt.Strategy):
                 self.cancel(self.entry_order)
                 self.entry_order = None
 
-            pow10 = math.pow(10, self.p.exchange_decimal)
-            qty_hl = round((safe_cap / safe_close) * pow10) / pow10
+            # 미리 계산된 pow10 사용
+            qty_hl = round((safe_cap / safe_close) * self.pow10) / self.pow10
             
             # HL Entry
             if qty_hl > 0 and h_enough:
@@ -412,7 +425,8 @@ class TestStrategy(bt.Strategy):
             
             # LL Entry (HL이 안 나갔을 때만)
             if not self.entry_order and l_enough:
-                qty_ll = round((safe_cap / safe_close) * pow10) / pow10
+                # 미리 계산된 pow10 사용
+                qty_ll = round((safe_cap / safe_close) * self.pow10) / self.pow10
                 if qty_ll > 0:
                     if self.p.open_at_ll == 'limits' and ll_plot > 0:
                         self.entry_order = self.buy(exectype=bt.Order.Limit, price=ll_plot, size=qty_ll)

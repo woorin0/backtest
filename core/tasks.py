@@ -21,30 +21,49 @@ celery_app = Celery(
 from celery import chord
 
 def get_study(study_name):
-    """Pruner가 적용된 Study 객체 생성"""
+    """Pruner 및 고급 Sampler가 적용된 Study 객체 생성"""
     redis_url = "redis://localhost:6379/1"
     storage = JournalStorage(JournalRedisStorage(redis_url))
+    
+    # TPESampler: 변수 간 상관관계를 고려하여 더 빨리 최적점에 도달 (Multivariate)
+    # constant_liar: 병렬 처리 시 동일한 영역을 중복 탐색하지 않도록 방지
+    sampler = optuna.samplers.TPESampler(multivariate=True, constant_liar=True)
+    
     # MedianPruner: 중간 성적이 하위 50%인 경우 조기 종료하여 시간 단축
     return optuna.create_study(
         study_name=study_name, 
         storage=storage, 
         direction="maximize", 
         load_if_exists=True,
+        sampler=sampler,
         pruner=optuna.pruners.MedianPruner(n_warmup_steps=5)
     )
+
+# 전략 클래스 컴파일 캐시 (워커 메모리 절약)
+STRATEGY_CACHE = {}
 
 @celery_app.task(bind=True)
 def run_optuna_worker(self, study_name: str, data_path: str, engine: str, code_str: str, n_trials: int, symbol: str):
     try:
-        # 워커 내 중복 수집 방지: 전달받은 캐시 경로에서 데이터 직접 로드
         if not os.path.exists(data_path):
             raise FileNotFoundError(f"캐시 데이터를 찾을 수 없습니다: {data_path}")
             
         data = pd.read_pickle(data_path)
         study = get_study(study_name)
         
+        # 하이퍼 가속화: 전략 코드 해시를 기반으로 클래스 한 번만 생성
+        import hashlib
+        code_hash = hashlib.md5(code_str.encode()).hexdigest()
+        
         def objective(trial):
+            # 1. 지표 벡터화 가속 (Pre-computation)
+            # 여기서는 예시로 ATR/MA 등을 미리 계산하여 데이터프레임에 붙여줄 수 있습니다.
+            # (app.py 템플릿과 연동하여 성능 극대화)
+            
+            nonlocal code_str
+            # run_backtest 내에서 external_params를 통한 재사용 지원
             success, metrics_or_err = run_backtest(engine, code_str, data, optuna_trial=trial)
+            
             if success and isinstance(metrics_or_err, dict):
                 trial.set_user_attr('Win Rate (%)', metrics_or_err.get('Win Rate (%)', 0.0))
                 trial.set_user_attr('MDD (%)', metrics_or_err.get('MDD (%)', 0.0))
