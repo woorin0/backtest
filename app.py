@@ -232,28 +232,28 @@ class TestStrategy(bt.Strategy):
         ('tr_hl', optuna_trial.suggest_categorical('tr_hl', [True, False]) if 'optuna_trial' in globals() and optuna_trial else True),
         ('ll_volatility_filter', optuna_trial.suggest_categorical('ll_volatility_filter', [True, False]) if 'optuna_trial' in globals() and optuna_trial else False),
         ('ma1_length', optuna_trial.suggest_int('ma1_length', 10, 50) if 'optuna_trial' in globals() and optuna_trial else 20),
-        ('ll_mult', optuna_trial.suggest_float('ll_mult', 1.0, 3.0) if 'optuna_trial' in globals() and optuna_trial else 1.5),
+        ('ll_mult', optuna_trial.suggest_float('ll_mult', 1.0, 3.0, step=0.01) if 'optuna_trial' in globals() and optuna_trial else 1.5),
         ('ma2_type', optuna_trial.suggest_categorical('ma2_type', ['SMA', 'EMA', 'SMMA (RMA)', 'WMA', 'VWMA']) if 'optuna_trial' in globals() and optuna_trial else 'EMA'),
         ('ma2_length', optuna_trial.suggest_int('ma2_length', 1, 10) if 'optuna_trial' in globals() and optuna_trial else 3),
         ('bb_ma_type', optuna_trial.suggest_categorical('bb_ma_type', ['SMA', 'EMA', 'SMMA (RMA)', 'WMA', 'VWMA']) if 'optuna_trial' in globals() and optuna_trial else 'EMA'),
         ('bb_length', optuna_trial.suggest_int('bb_length', 10, 50) if 'optuna_trial' in globals() and optuna_trial else 20),
-        ('bb_dev', optuna_trial.suggest_float('bb_dev', 1.0, 3.0) if 'optuna_trial' in globals() and optuna_trial else 2.0),
-        ('bb_min_width', optuna_trial.suggest_float('bb_min_width', 1.0, 5.0) if 'optuna_trial' in globals() and optuna_trial else 3.0),
+        ('bb_dev', optuna_trial.suggest_float('bb_dev', 1.0, 3.0, step=0.01) if 'optuna_trial' in globals() and optuna_trial else 2.0),
+        ('bb_min_width', optuna_trial.suggest_float('bb_min_width', 1.0, 5.0, step=0.01) if 'optuna_trial' in globals() and optuna_trial else 3.0),
         ('hott_ma_type', optuna_trial.suggest_categorical('hott_ma_type', ['SMA', 'EMA', 'SMMA (RMA)', 'WMA', 'VWMA']) if 'optuna_trial' in globals() and optuna_trial else 'EMA'),
         ('hott_length', optuna_trial.suggest_int('hott_length', 1, 10) if 'optuna_trial' in globals() and optuna_trial else 2),
-        ('hott_percent', optuna_trial.suggest_float('hott_percent', 0.1, 2.0) if 'optuna_trial' in globals() and optuna_trial else 0.6),
+        ('hott_percent', optuna_trial.suggest_float('hott_percent', 0.1, 2.0, step=0.01) if 'optuna_trial' in globals() and optuna_trial else 0.6),
         ('hott_h_length', optuna_trial.suggest_int('hott_h_length', 50, 200) if 'optuna_trial' in globals() and optuna_trial else 100),
         ('hott_use_high', optuna_trial.suggest_categorical('hott_use_high', [True, False]) if 'optuna_trial' in globals() and optuna_trial else False),
         ('high_int', optuna_trial.suggest_int('high_int', 0, 1) if 'optuna_trial' in globals() and optuna_trial else 0),
-        ('entry_ll_per', optuna_trial.suggest_float('entry_ll_per', 0.02, 0.15) if 'optuna_trial' in globals() and optuna_trial else 0.06),
-        ('tp_hl_per', optuna_trial.suggest_float('tp_hl_per', 0.005, 0.05) if 'optuna_trial' in globals() and optuna_trial else 0.015),
-        ('sl_hl_per', optuna_trial.suggest_float('sl_hl_per', 0.01, 0.07) if 'optuna_trial' in globals() and optuna_trial else 0.02),
-        ('tp_ll_per', optuna_trial.suggest_float('tp_ll_per', 0.005, 0.05) if 'optuna_trial' in globals() and optuna_trial else 0.015),
-        ('sl_ll_per', optuna_trial.suggest_float('sl_ll_per', 0.01, 0.07) if 'optuna_trial' in globals() and optuna_trial else 0.015),
+        ('entry_ll_per', optuna_trial.suggest_float('entry_ll_per', 0.02, 0.15, step=0.0001) if 'optuna_trial' in globals() and optuna_trial else 0.06),
+        ('tp_hl_per', optuna_trial.suggest_float('tp_hl_per', 0.005, 0.05, step=0.0001) if 'optuna_trial' in globals() and optuna_trial else 0.015),
+        ('sl_hl_per', optuna_trial.suggest_float('sl_hl_per', 0.01, 0.07, step=0.0001) if 'optuna_trial' in globals() and optuna_trial else 0.02),
+        ('tp_ll_per', optuna_trial.suggest_float('tp_ll_per', 0.005, 0.05, step=0.0001) if 'optuna_trial' in globals() and optuna_trial else 0.015),
+        ('sl_ll_per', optuna_trial.suggest_float('sl_ll_per', 0.01, 0.07, step=0.0001) if 'optuna_trial' in globals() and optuna_trial else 0.015),
         ('atr_length', optuna_trial.suggest_int('atr_length', 7, 20) if 'optuna_trial' in globals() and optuna_trial else 10),
         ('atr_length2', optuna_trial.suggest_int('atr_length2', 7, 20) if 'optuna_trial' in globals() and optuna_trial else 10),
-        ('hl_tp_atr_mul', optuna_trial.suggest_float('hl_tp_atr_mul', 1.0, 6.0) if 'optuna_trial' in globals() and optuna_trial else 2.0),
-        ('hl_sl_atr_mul', optuna_trial.suggest_float('hl_sl_atr_mul', 1.0, 6.0) if 'optuna_trial' in globals() and optuna_trial else 4.0),
+        ('hl_tp_atr_mul', optuna_trial.suggest_float('hl_tp_atr_mul', 1.0, 6.0, step=0.01) if 'optuna_trial' in globals() and optuna_trial else 2.0),
+        ('hl_sl_atr_mul', optuna_trial.suggest_float('hl_sl_atr_mul', 1.0, 6.0, step=0.01) if 'optuna_trial' in globals() and optuna_trial else 4.0),
         ('tr_ma_type', optuna_trial.suggest_categorical('tr_ma_type', ['SMA', 'EMA', 'SMMA (RMA)', 'WMA', 'VWMA']) if 'optuna_trial' in globals() and optuna_trial else 'EMA'),
         ('tr_ma_length', optuna_trial.suggest_int('tr_ma_length', 50, 200) if 'optuna_trial' in globals() and optuna_trial else 100),
         ('exchange_decimal', optuna_trial.suggest_int('exchange_decimal', 0, 8) if 'optuna_trial' in globals() and optuna_trial else 3),
@@ -539,55 +539,56 @@ if os.path.exists(CACHE_FILE):
 if start_btn and not active_task:
     st.subheader("🔄 최적화 실행 진행 현황")
     
-    # 1. 분산 처리를 위한 설정 (4코어 활용)
-    study_name = f"study_{int(time.time())}"
-    trials_per_worker = n_trials // 4
-    rem = n_trials % 4
+    # 1. 데이터 먼저 수집 (메인 워커에서 한 번만 수행하여 캐시 생성)
+    from core.data_fetcher import fetch_candles, get_cache_path
+    progress_bar = st.progress(0, text="데이터 수집 준비 중...")
+    data = fetch_candles(exchange, symbol, timeframe, start_date, end_date, limit, progress_bar=progress_bar)
     
-    # 2. Header: 4개의 병렬 워커 생성
-    header = []
-    for i in range(4):
-        header.append(run_optuna_worker.s(
+    if data is None or data.empty:
+        st.error("데이터 수집에 실패했습니다. 거래소 설정이나 기간을 확인해주세요.")
+    else:
+        # 데이터 캐시 경로 확보
+        data_path = get_cache_path(exchange, symbol, timeframe, start_date, end_date)
+        
+        # 2. 분산 처리를 위한 설정 (4코어 선점)
+        study_name = f"study_{int(time.time())}"
+        trials_per_worker = n_trials // 4
+        rem = n_trials % 4
+        
+        # 3. Header: 4개의 병렬 워커 생성 (데이터 경로 전달)
+        header = []
+        for i in range(4):
+            header.append(run_optuna_worker.s(
+                study_name=study_name,
+                data_path=data_path, # 수집된 캐시 경로 전달
+                engine=engine,
+                code_str=strategy_code,
+                n_trials=trials_per_worker + (rem if i == 3 else 0),
+                symbol=symbol
+            ))
+        
+        # 4. Callback: 모든 워커 완료 후 통합 리포트 생성
+        callback = finalize_optuna_study.s(
             study_name=study_name,
-            exchange=exchange,
-            symbol=symbol,
-            timeframe=timeframe,
-            start_date=str(start_date),
-            end_date=str(end_date),
-            limit=limit,
+            data_path=data_path,
             engine=engine,
-            code_str=strategy_code,
-            n_trials=trials_per_worker + (rem if i == 3 else 0)
-        ))
-    
-    # 3. Callback: 모든 워커 완료 후 통합 리포트 생성
-    callback = finalize_optuna_study.s(
-        study_name=study_name,
-        exchange=exchange,
-        symbol=symbol,
-        timeframe=timeframe,
-        start_date=str(start_date),
-        end_date=str(end_date),
-        limit=limit,
-        engine=engine
-    )
-    
-    # 4. Chord 실행
-    result = chord(header)(callback)
-    
-    # 헤더(워커)들의 ID 추출
-    worker_ids = [h.id for h in header]
-    
-    # 프로세스 캐시 저장
-    active_task = {
-        "task_id": result.id, 
-        "worker_ids": worker_ids,
-        "study_name": study_name,
-        "n_trials": n_trials,
-        "exchange": exchange,
-        "symbol": symbol,
-        "engine": engine
-    }
+            symbol=symbol
+        )
+        
+        # 5. Chord 실행
+        result = chord(header)(callback)
+        worker_ids = [h.id for h in header]
+        
+        # 프로세스 캐시 저장
+        active_task = {
+            "task_id": result.id, 
+            "worker_ids": worker_ids,
+            "study_name": study_name,
+            "n_trials": n_trials,
+            "exchange": exchange,
+            "symbol": symbol,
+            "engine": engine
+        }
     try:
         with open(CACHE_FILE, "w") as f:
             json.dump(active_task, f)

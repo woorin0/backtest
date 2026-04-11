@@ -8,7 +8,6 @@ try:
     from optuna.storages import JournalRedisStorage
 except ImportError:
     from optuna_integration.storages import JournalRedisStorage
-from core.data_fetcher import fetch_candles
 from core.engine_runner import run_backtest
 from core.notifier import send_discord_alert, send_discord_error
 from utils.exporter import create_excel_buffer
@@ -21,87 +20,28 @@ celery_app = Celery(
 
 from celery import chord
 
-@celery_app.task(bind=True)
-def run_optimization_task(self, exchange: str, symbol: str, timeframe: str, start_date: str, end_date: str, limit: int, engine: str, code_str: str, n_trials: int):
-    # 1. 데이터 수집
-    data = fetch_candles(exchange, symbol, timeframe, start_date, end_date, limit, progress_bar=None)
-    if data is None or data.empty:
-        return {"status": "FAILED", "reason": "데이터 수집 실패"}
-
-    # 2. Redis 기반 Optuna 저장소 설정
-    study_name = f"study_{self.request.id}"
+def get_study(study_name):
+    """Pruner가 적용된 Study 객체 생성"""
     redis_url = "redis://localhost:6379/1"
     storage = JournalStorage(JournalRedisStorage(redis_url))
-    study = optuna.create_study(study_name=study_name, storage=storage, direction="maximize", load_if_exists=True)
-    
-    # 3. 최적화 목표 정의 (objective)
-    def objective(trial):
-        success, metrics_or_err = run_backtest(engine, code_str, data, optuna_trial=trial)
-        if success and isinstance(metrics_or_err, dict):
-            trial.set_user_attr('Win Rate (%)', metrics_or_err.get('Win Rate (%)', 0.0))
-            trial.set_user_attr('MDD (%)', metrics_or_err.get('MDD (%)', 0.0))
-            trial.set_user_attr('Total Trades', metrics_or_err.get('Total Trades', 0))
-            trial.set_user_attr('Total Profit', metrics_or_err.get('Total Profit', 0.0))
-            return float(metrics_or_err.get("Total Return (%)", -999.0))
-        else:
-            raise optuna.TrialPruned()
-
-    # 4. 최적화 실행
-    study.optimize(objective, n_trials=n_trials)
-    
-    # 5. 모든 완료된 Trial 수집
-    trials = study.trials
-    complete_trials = [t for t in trials if t.state == optuna.trial.TrialState.COMPLETE]
-    
-    # 정렬
-    complete_trials.sort(key=lambda t: t.value if t.value is not None else -9999, reverse=True)
-    
-    if not complete_trials:
-        return {"status": "FAILED", "reason": f"조건(승률60/MDD30)에 부합하는 결과가 없습니다. (총 {len(trials)}회 탐색 완료)"}
-
-    # 6. Top 50 결과 가공
-    top_50 = complete_trials[:50]
-    top_configs = []
-    for t in top_50:
-        top_configs.append({
-            "Total Return (%)": t.value,
-            "Win Rate (%)": t.user_attrs.get('Win Rate (%)', 0),
-            "MDD (%)": t.user_attrs.get('MDD (%)', 0),
-            "Total Trades": t.user_attrs.get('Total Trades', 0),
-            "Total Profit": round(t.user_attrs.get('Total Profit', 0.0), 2),
-            "params": t.params
-        })
-        
-    # 7. 디스코드 알림 및 엑셀 생성
-    best_trial = complete_trials[0]
-    send_discord_alert(study_name, best_trial.value, engine, symbol)
-    
-    best_metrics = {
-        "Total Return (%)": best_trial.value, 
-        "Win Rate (%)": best_trial.user_attrs.get('Win Rate (%)', 0), 
-        "Best Params": str(best_trial.params)
-    }
-    excel_buf = create_excel_buffer(data, top_configs)
-    
-    os.makedirs("results", exist_ok=True)
-    file_path = f"results/best_{self.request.id}.xlsx"
-    with open(file_path, "wb") as f:
-        f.write(excel_buf.read())
-        
-    return {"status": "SUCCESS", "study_name": study_name, "best_value": best_trial.value, "excel_file": file_path}
+    # MedianPruner: 중간 성적이 하위 50%인 경우 조기 종료하여 시간 단축
+    return optuna.create_study(
+        study_name=study_name, 
+        storage=storage, 
+        direction="maximize", 
+        load_if_exists=True,
+        pruner=optuna.pruners.MedianPruner(n_warmup_steps=5)
+    )
 
 @celery_app.task(bind=True)
-def run_optuna_worker(self, study_name: str, exchange: str, symbol: str, timeframe: str, start_date: str, end_date: str, limit: int, engine: str, code_str: str, n_trials: int):
+def run_optuna_worker(self, study_name: str, data_path: str, engine: str, code_str: str, n_trials: int, symbol: str):
     try:
-        data = fetch_candles(exchange, symbol, timeframe, start_date, end_date, limit, progress_bar=None)
-        if data is None or data.empty:
-            err_msg = f"데이터 수집 실패 ({exchange} {symbol})"
-            send_discord_error(err_msg, pair=symbol, engine=engine)
-            return {"error": err_msg}
-
-        redis_url = "redis://localhost:6379/1"
-        storage = JournalStorage(JournalRedisStorage(redis_url))
-        study = optuna.create_study(study_name=study_name, storage=storage, direction="maximize", load_if_exists=True)
+        # 워커 내 중복 수집 방지: 전달받은 캐시 경로에서 데이터 직접 로드
+        if not os.path.exists(data_path):
+            raise FileNotFoundError(f"캐시 데이터를 찾을 수 없습니다: {data_path}")
+            
+        data = pd.read_pickle(data_path)
+        study = get_study(study_name)
         
         def objective(trial):
             success, metrics_or_err = run_backtest(engine, code_str, data, optuna_trial=trial)
@@ -123,18 +63,13 @@ def run_optuna_worker(self, study_name: str, exchange: str, symbol: str, timefra
 
 
 @celery_app.task(bind=True)
-def finalize_optuna_study(self, worker_results, study_name: str, exchange: str, symbol: str, timeframe: str, start_date: str, end_date: str, limit: int, engine: str):
+def finalize_optuna_study(self, worker_results, study_name: str, data_path: str, engine: str, symbol: str):
     try:
-        # 엑셀 생성을 위한 데이터 로드 (타임아웃 및 재시도 고려)
-        data = fetch_candles(exchange, symbol, timeframe, start_date, end_date, limit, progress_bar=None)
-        if data is None or data.empty:
-            err_msg = f"최종 결과 수집 실패: 데이터가 비어 있습니다 ({symbol})"
-            send_discord_error(err_msg, pair=symbol, engine=engine)
-            return {"status": "FAILED", "reason": err_msg}
-
-        redis_url = "redis://localhost:6379/1"
-        storage = JournalStorage(JournalRedisStorage(redis_url))
-        study = optuna.load_study(study_name=study_name, storage=storage)
+        if not os.path.exists(data_path):
+            raise FileNotFoundError(f"최종 리포트용 캐시 데이터를 찾을 수 없습니다: {data_path}")
+            
+        data = pd.read_pickle(data_path)
+        study = get_study(study_name)
         
         trials = study.trials
         complete_trials = [t for t in trials if t.state == optuna.trial.TrialState.COMPLETE]
@@ -156,7 +91,6 @@ def finalize_optuna_study(self, worker_results, study_name: str, exchange: str, 
         
         if best_trial:
             send_discord_alert(study_name, best_trial.value, engine, symbol)
-            
             excel_buf = create_excel_buffer(data, top_configs)
             os.makedirs("results", exist_ok=True)
             file_path = f"results/best_{self.request.id}.xlsx"
@@ -165,11 +99,9 @@ def finalize_optuna_study(self, worker_results, study_name: str, exchange: str, 
                 
             return {"status": "SUCCESS", "study_name": study_name, "best_value": best_trial.value, "excel_file": file_path}
         
-        err_msg = "조건에 부합하는 완료된 Trial이 없습니다."
-        send_discord_error(err_msg, pair=symbol, engine=engine)
-        return {"status": "FAILED", "reason": err_msg}
+        return {"status": "FAILED", "reason": "완료된 Trial이 없습니다."}
 
     except Exception as e:
-        err_msg = f"최종 결과 취합 중 치명적 오류 발생: {str(e)}"
+        err_msg = f"최종 결과 취합 중 오류 발생: {str(e)}"
         send_discord_error(err_msg, pair=symbol, engine=engine)
         return {"status": "FAILED", "reason": err_msg}
