@@ -106,11 +106,11 @@ def sim_final_nb(h, l, c, hlp_raw, ll_p, atp, ats, trm, inst_num, use_tr, o_m_h,
         if not pos:
             t_en_h = (h[i] > hlp) if o_m_h == 'limits' else (c[i] > hlp)
             if t_en_h:
-                en[i]=True; eid=1; pos=True; ep=hlp if o_m_h=='limits' else c[i]; pr[i]=ep; etp=atp[i]; esl=ats[i]; sz[i]=1.0
+                en[i]=True; eid=1; pos=True; ep=hlp if o_m_h=='limits' else c[i]; pr[i]=ep; etp=atp[i]; esl=ats[i]; sz[i]=0.995
             else:
                 t_en_l = (l[i] < llp) if o_m_l == 'limits' else (c[i] < llp)
                 if t_en_l:
-                    en[i]=True; eid=2; pos=True; ep=llp if o_m_l=='limits' else c[i]; pr[i]=ep; etp=atp[i]; esl=ats[i]; sz[i]=1.0
+                    en[i]=True; eid=2; pos=True; ep=llp if o_m_l=='limits' else c[i]; pr[i]=ep; etp=atp[i]; esl=ats[i]; sz[i]=0.995
         else:
             if eid == 1: # HL Case
                 tf, ta = ep*(1+tph), ep + 2.0*etp
