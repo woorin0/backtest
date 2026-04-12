@@ -1,4 +1,4 @@
-# [100.0% 무결성] 전략 코드 템플릿 저장소 (긴급 에러 보정 버전)
+# [100.0% 무결성] 전략 코드 템플릿 저장소 (긴급 에러 및 NaN 보정 버전)
 
 VECTORBT_STRATEGY = """# [100.0% 무결성] Vectorbt 초정밀 가속 전략
 import vectorbt as vbt
@@ -59,11 +59,19 @@ ma2, tr_ma = calc_ma(data['Close'], ma2_len, ma2_type).values.astype(np.float64)
 
 @njit
 def calc_hott_nb(mavg_np, percent):
-    n = len(mavg_np); hott = np.zeros(n); lsp, ssp, dv = 0.0, 0.0, 1
-    for i in range(1, n):
-        ma = mavg_np[i]; fk = ma * percent * 0.01
+    n = len(mavg_np)
+    hott = np.zeros(n)
+    lsp, ssp, dv = 0.0, 0.0, 1
+    found_first = False
+    for i in range(n):
+        ma = mavg_np[i]
+        if np.isnan(ma):
+            hott[i] = np.nan
+            continue
+        fk = ma * percent * 0.01
         ls, ss = ma - fk, ma + fk
-        if i == 1: lsp, ssp = ls, ss
+        if not found_first:
+            lsp, ssp, found_first = ls, ss, True
         if ma > lsp: lsp = max(ls, lsp)
         if ma < ssp: ssp = min(ss, ssp)
         if dv == -1 and ma > ssp: dv = 1
@@ -80,7 +88,9 @@ def sim_final_nb(h, l, c, hlp_raw, ll_p, atp, ats, trm, inst_num, use_tr, o_m_h,
     n = len(c); en, ex, pr, sz = np.zeros(n, dtype=np.bool_), np.zeros(n, dtype=np.bool_), np.zeros(n), np.zeros(n)
     pos, ep, etp, esl, pf, bfe, eid = False, 0.0, 0.0, 0.0, 0, -1, 0
     for i in range(start_idx, n):
+        if i-1-h_i < 0: continue
         hlp, llp = hlp_raw[i-1-h_i], ll_p[i-1]
+        if np.isnan(hlp) or np.isnan(llp): continue
         if not pos:
             t_en_h = (h[i] > hlp) if o_m_h == 'limits' else (c[i] > hlp)
             if t_en_h and hlp > 0:
@@ -113,15 +123,13 @@ def sim_final_nb(h, l, c, hlp_raw, ll_p, atp, ats, trm, inst_num, use_tr, o_m_h,
                     ex[i], pr[i], sz[i], pos = True, xp, 1.0, False
     return en, ex, pr, sz
 
-actual_start = max(warmup, 1 + h_int)
+actual_start = int(max(warmup, 1 + h_int) + 5)
 en, ex, pr, sz = sim_final_nb(h_np, l_np, c_np, hl_p_raw, ll_p_raw, atr_tp, atr_sl, tr_ma, inst, tr_hl, o_m_hl, o_m_ll, e_m_hl, e_m_ll, tp_hl_type, sl_hl_type, h_int, tp_hl_per, sl_hl_per, tp_ll_per, sl_ll_per, actual_start)
 portfolio = vbt.Portfolio.from_signals(data['Close'], en, ex, price=pr, size=sz, size_type='percent', init_cash=10000, fees=0.0008, slippage=slippage)
 
-# 🚨 지표 추출 문법 보정 및 에러 폴백 수치 수정 (-999.0 -> 0.0)
 try:
     port_stats = portfolio.stats()
     win_rate = float(port_stats.get('Win Rate [%]', 0.0))
-    # total_return, profit 등 속성에 안전하게 접근
     total_return = float(getattr(portfolio, 'total_return', 0.0) * 100.0)
     total_profit = float(getattr(portfolio, 'total_profit', 0.0))
     max_drawdown = float(getattr(portfolio, 'max_drawdown', 0.0) * 100.0)
@@ -136,9 +144,9 @@ metrics = {
     "Total Trades": total_trades,
     "Total Profit": round(total_profit, 2)
 }
-"""
+\"\"\"
 
-BACKTRADER_STRATEGY = """import backtrader as bt
+BACKTRADER_STRATEGY = \"\"\"import backtrader as bt
 import math
 import datetime
 import numpy as np
@@ -289,8 +297,8 @@ if 'data' in globals():
     cerebro.adddata(bt.feeds.PandasData(dataname=data))
     cerebro.broker.setcash(10000.0)
     cerebro.broker.setcommission(commission=0.0008)
-    cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name="trades")
-    cerebro.addanalyzer(bt.analyzers.DrawDown, _name="drawdown")
+    cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name=\"trades\")
+    cerebro.addanalyzer(bt.analyzers.DrawDown, _name=\"drawdown\")
     initial_value = cerebro.broker.getvalue()
     results = cerebro.run()
     final_value = cerebro.broker.getvalue()
@@ -308,11 +316,10 @@ if 'data' in globals():
             mdd = dd_an.max.drawdown if 'max' in dd_an else 0.0
         except: pass
     metrics = {
-        "Total Return (%)": round(ret_pct, 2),
-        "Total Profit": round(tot_profit, 2),
-        "Win Rate (%)": round(win_rate, 2),
-        "MDD (%)": round(mdd, 2),
-        "Total Trades": tot_trades
+        \"Total Return (%)\": round(ret_pct, 2),
+        \"Total Profit\": round(tot_profit, 2),
+        \"Win Rate (%)\": round(win_rate, 2),
+        \"MDD (%)\": round(mdd, 2),
+        \"Total Trades\": tot_trades
     }
-"""
-
+\"\"\"

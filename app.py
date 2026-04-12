@@ -62,7 +62,7 @@ c1, c2, c3, c4 = st.columns(4)
 p_m1, p_m2, p_m3, p_m4 = c1.empty(), c2.empty(), c3.empty(), c4.empty()
 
 def draw_m(p, l, v, color="#007aff"):
-    p.markdown(f"<div style='background: #f8f9fa; border-radius: 12px; padding: 15px; text-align: center; border: 1px solid #ddd;'><p style='color: #666; margin: 0;'>{l}</p><h2 style='color: {color}; margin: 5px 0;'>{v}</h2></div>", unsafe_allow_html=True)
+    p.markdown(f"<div style='background: #f8f9fa; border-radius: 12px; padding: 15px; text-align: center; border: 1px solid #ddd; height: 110px;'><p style='color: #666; font-size: 0.9em; margin: 0;'>{l}</p><h2 style='color: {color}; margin: 5px 0; font-size: 1.6em;'>{v}</h2></div>", unsafe_allow_html=True)
 
 st.divider()
 
@@ -119,16 +119,28 @@ if active_task:
     tk = AsyncResult(active_task["task_id"], app=celery_app)
     storage = JournalStorage(JournalRedisStorage("redis://localhost:6379/1"))
     
-    if not tk.ready():
+    @st.fragment(run_every=3)
+    def monitor_progress():
         try:
             study = optuna.load_study(study_name=active_task["study_name"], storage=storage)
             compl = len(study.get_trials(states=[optuna.trial.TrialState.COMPLETE]))
-            best = study.best_value if compl > 0 else 0.0
+            
+            # 베스트 전략 상세 지표 파싱
+            best_val, best_win, best_mdd = 0.0, 0.0, 0.0
+            if compl > 0:
+                best_trial = study.best_trial
+                best_val = best_trial.value
+                best_win = best_trial.user_attrs.get('Win Rate (%)', 0.0)
+                best_mdd = best_trial.user_attrs.get('MDD (%)', 0.0)
             
             p_v = min(int(compl / active_task["n_trials"] * 100), 100)
             gauge_slot.progress(p_v, text=f"🚀 실시간 최적화 분석 중... {compl} / {active_task['n_trials']} ({p_v}%)")
-            draw_m(p_m1, "최고 수익률", f"{best:.2f}%", "#34C759")
-            draw_m(p_m4, "완료된 탐색", f"{compl} 회")
+            
+            # 상단 4개 지표 카드 실시간 갱신
+            draw_m(p_m1, "최고 수익률", f"{best_val:.2f}%", "#34C759")
+            draw_m(p_m2, "최고 승률", f"{best_win:.2f}%", "#007aff")
+            draw_m(p_m3, "최저 MDD", f"{best_mdd:.2f}%", "#FF3B30")
+            draw_m(p_m4, "완료된 탐색", f"{compl} 회", "#5856D6")
             
             # 워커 상세 진단
             diag_text = ""
@@ -137,14 +149,25 @@ if active_task:
                 diag_text += f"- **워커 {wid[:6]}**: {stat}\n"
             diag_slot.markdown(diag_text)
             
-            status_slot.info(f"📡 현재 {active_task['study_name']} 세션이 4개 코어를 풀가동 중입니다.")
+            status_slot.info(f"📡 {active_task['study_name']} 세션이 4개 코어를 풀가동 중입니다.")
             
-            # 💡 3초 후 스크립트 재실행 (세션 스레드 점유 해제 및 웹 응답성 보장)
-            time.sleep(3)
-            st.rerun()
-        except:
-            time.sleep(1)
-            st.rerun()
+            if tk.ready():
+                st.rerun() # 작업 완료 시에만 전체 페이지 갱신
+        except Exception as e:
+            status_slot.warning(f"🔄 데이터 동기화 중... ({str(e)})")
+
+    if not tk.ready():
+        monitor_progress()
+    else:
+        # 완료 상태 표시를 위해 한 번 더 그리기
+        try:
+            study = optuna.load_study(study_name=active_task["study_name"], storage=storage)
+            best_trial = study.best_trial
+            draw_m(p_m1, "최고 수익률", f"{best_trial.value:.2f}%", "#34C759")
+            draw_m(p_m2, "최고 승률", f"{best_trial.user_attrs.get('Win Rate (%)', 0.0):.2f}%", "#007aff")
+            draw_m(p_m3, "최저 MDD", f"{best_trial.user_attrs.get('MDD (%)', 0.0):.2f}%", "#FF3B30")
+            draw_m(p_m4, "탐색 종료", f"{len(study.get_trials())} 회", "#000000")
+        except: pass
     
     # 작업 완료 후 처리
     try:

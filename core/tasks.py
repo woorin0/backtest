@@ -13,6 +13,15 @@ from core.notifier import send_discord_alert, send_discord_error, send_discord_p
 from utils.exporter import create_excel_report
 import redis
 import json
+import subprocess
+import sys
+
+# [자가 치유] 필수 모듈 xlsxwriter 부재 시 자동 설치
+try:
+    import xlsxwriter
+except ImportError:
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "xlsxwriter"])
+    import xlsxwriter
 
 # Redis 연결 설정
 status_redis = redis.Redis(host='localhost', port=6379, db=2, decode_responses=True)
@@ -90,6 +99,10 @@ def run_optuna_worker(self, study_name: str, data_path: str, engine: str, code_s
 
 @celery_app.task(bind=True)
 def finalize_optuna_study(self, worker_results, study_name: str, data_path: str, engine: str, symbol: str):
+    # [방어 로직] 실행 시점에 한 번 더 체크
+    try: import xlsxwriter
+    except ImportError: subprocess.check_call([sys.executable, "-m", "pip", "install", "xlsxwriter"])
+    
     try:
         study = get_study(study_name)
         data = pd.read_pickle(data_path)
