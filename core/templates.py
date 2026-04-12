@@ -179,8 +179,8 @@ class HOTTIndicator(bt.Indicator):
         longStop, shortStop = mavg - fark, mavg + fark
         if len(self) == 1 + (self.p.period + self.p.length) or not hasattr(self, 'lsp'):
             self.lsp, self.ssp, self.dir = longStop, shortStop, 1
-        if mavg > self.lsp: longStop = max(longStop, self.lsp)
-        if mavg < self.ssp: shortStop = min(self.ssp, self.ssp)
+        if mavg > self.lsp: longStop = max(ls, self.lsp)
+        if mavg < self.ssp: shortStop = min(ss, self.ssp)
         if self.dir == -1 and mavg > self.ssp: self.dir = 1
         elif self.dir == 1 and mavg < self.lsp: self.dir = -1
         mt = longStop if self.dir == 1 else shortStop

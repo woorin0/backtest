@@ -52,7 +52,7 @@ def run_backtrader(code_str: str, data: pd.DataFrame, optuna_trial=None, externa
         metrics = {
             "Total Return (%)": round(tot_return, 2),
             "Win Rate (%)": 0.0,
-            "Max Drawdown (%)": round(max_dd, 2),
+            "MDD (%)": round(max_dd, 2),
             "Total Trades": 0,
             "Total Profit": round(final_value - 10000.0, 2)
         }
