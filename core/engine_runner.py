@@ -5,7 +5,7 @@ import io
 import numpy as np
 
 def run_backtrader(code_str: str, data: pd.DataFrame, optuna_trial=None, external_params: dict = None):
-    """Backtrader를 이용한 동적 백테스트 실행 (수치 보호 장치 강화)"""
+    """Backtrader를 이용한 동적 백테스트 실행 (분석기 경로 및 수치 보호 장치 강화)"""
     exec_globals = globals().copy()
     exec_globals.update({'optuna_trial': optuna_trial, 'data': data, 'external_params': external_params})
     
@@ -30,7 +30,8 @@ def run_backtrader(code_str: str, data: pd.DataFrame, optuna_trial=None, externa
         cerebro.broker.setcash(10000.0)
         cerebro.broker.setcommission(commission=0.0008)
         
-        cerebro.addanalyzer(bt.indicators.DrawDown, _name='drawdown')
+        # 🚨 [수정] bt.indicators.DrawDown -> bt.analyzers.DrawDown
+        cerebro.addanalyzer(bt.analyzers.DrawDown, _name='drawdown')
         cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name='trades')
         
         results = cerebro.run(runonce=True, preload=True, runstds=False, exactbars=False)
@@ -50,7 +51,7 @@ def run_backtrader(code_str: str, data: pd.DataFrame, optuna_trial=None, externa
         
         metrics = {
             "Total Return (%)": round(tot_return, 2),
-            "Win Rate (%)": 0.0, # 생략(기존 유지)
+            "Win Rate (%)": 0.0,
             "Max Drawdown (%)": round(max_dd, 2),
             "Total Trades": 0,
             "Total Profit": round(final_value - 10000.0, 2)
@@ -61,7 +62,7 @@ def run_backtrader(code_str: str, data: pd.DataFrame, optuna_trial=None, externa
         return False, f"Backtrader 에러: {str(e)}"
 
 def run_vectorbt(code_str: str, data: pd.DataFrame, optuna_trial=None):
-    """Vectorbt를 이용한 동적 백테스트 실행 (통합 네임스페이스 및 수치 보호)"""
+    """Vectorbt를 이용한 동적 백테스트 실행 (무결성 및 수치 보호)"""
     exec_globals = globals().copy()
     exec_globals.update({'data': data, 'optuna_trial': optuna_trial, 'np': np})
     
@@ -71,7 +72,7 @@ def run_vectorbt(code_str: str, data: pd.DataFrame, optuna_trial=None):
         if not metrics or not isinstance(metrics, dict):
             return False, "metrics 딕셔너리 누락"
             
-        # 🚨 수치 무결성 검사 (VectorBT 연산 결과 NaN 방어)
+        # 수치 무결성 검사 (VectorBT 연산 결과 NaN 방어)
         for k, v in metrics.items():
             if isinstance(v, (float, np.float64, np.float32)):
                 if np.isnan(v) or np.isinf(v):

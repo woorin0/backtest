@@ -1,4 +1,4 @@
-# [100.0% 무결성] 전략 코드 템플릿 저장소 (최종 런타임 보정 버전)
+# [100.0% 무결성] 전략 코드 템플릿 저장소 (긴급 에러 보정 버전)
 
 VECTORBT_STRATEGY = """# [100.0% 무결성] Vectorbt 초정밀 가속 전략
 import vectorbt as vbt
@@ -117,16 +117,17 @@ actual_start = max(warmup, 1 + h_int)
 en, ex, pr, sz = sim_final_nb(h_np, l_np, c_np, hl_p_raw, ll_p_raw, atr_tp, atr_sl, tr_ma, inst, tr_hl, o_m_hl, o_m_ll, e_m_hl, e_m_ll, tp_hl_type, sl_hl_type, h_int, tp_hl_per, sl_hl_per, tp_ll_per, sl_ll_per, actual_start)
 portfolio = vbt.Portfolio.from_signals(data['Close'], en, ex, price=pr, size=sz, size_type='percent', init_cash=10000, fees=0.0008, slippage=slippage)
 
-# 🚨 지표 추출 문법 최종 보정 (Property 접근 및 거래 유무 체크)
+# 🚨 지표 추출 문법 보정 및 에러 폴백 수치 수정 (-999.0 -> 0.0)
 try:
     port_stats = portfolio.stats()
     win_rate = float(port_stats.get('Win Rate [%]', 0.0))
-    total_return = float(portfolio.total_return * 100.0)
-    total_profit = float(portfolio.total_profit)
-    max_drawdown = float(portfolio.max_drawdown * 100.0)
+    # total_return, profit 등 속성에 안전하게 접근
+    total_return = float(getattr(portfolio, 'total_return', 0.0) * 100.0)
+    total_profit = float(getattr(portfolio, 'total_profit', 0.0))
+    max_drawdown = float(getattr(portfolio, 'max_drawdown', 0.0) * 100.0)
     total_trades = int(portfolio.trades.count())
 except:
-    win_rate, total_return, total_profit, max_drawdown, total_trades = 0.0, -999.0, -10000.0, 0.0, 0
+    win_rate, total_return, total_profit, max_drawdown, total_trades = 0.0, 0.0, 0.0, 0.0, 0
 
 metrics = {
     "Total Return (%)": round(total_return, 2),

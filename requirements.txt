@@ -2,6 +2,7 @@ streamlit
 ccxt
 pandas
 openpyxl
+xlsxwriter
 requests
 backtrader
 vectorbt
@@ -9,5 +10,5 @@ python-dotenv
 celery
 redis
 optuna
-optuna-integration
+optuna_integration
 SQLAlchemy
