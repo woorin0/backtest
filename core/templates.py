@@ -91,8 +91,7 @@ hl_p_raw, ll_p_raw = (hott_v if hl_price_type == 'H/L OTT' else (bb_u if hl_pric
 @njit
 def sim_final_nb(h, l, c, hlp_raw, ll_p, atp, ats, trm, inst_num, use_tr, o_m_h, o_m_l, e_m_h, e_m_l, tp_t, slice_t, h_i, tph, slh, tpl, sll, start_idx):
     n = len(c); en, ex = np.zeros(n, dtype=np.bool_), np.zeros(n, dtype=np.bool_)
-    pr = c.copy() # [V6 핵심] 평상시 비거래 구간에서도 NAV(자산가치) 평가가 가능하도록 종가 기반 초기화
-    sz = np.full(n, np.nan)
+    pr = c.copy() # [V9] 종가 기반 (sz 소멸)
     pos, ep, etp, esl, pf, bfe, eid = False, 0.0, 0.0, 0.0, 0, -1, 0
     for i in range(start_idx, n):
         if i-1-h_i < 0: continue
@@ -106,11 +105,15 @@ def sim_final_nb(h, l, c, hlp_raw, ll_p, atp, ats, trm, inst_num, use_tr, o_m_h,
         if not pos:
             t_en_h = (h[i] > hlp) if o_m_h == 'limits' else (c[i] > hlp)
             if t_en_h:
-                en[i]=True; eid=1; pos=True; ep=hlp if o_m_h=='limits' else c[i]; pr[i]=ep; etp=atp[i]; esl=ats[i]; sz[i]=0.995
+                en[i]=True; eid=1; pos=True; ep=hlp if o_m_h=='limits' else c[i]
+                pr[i] = ep * 1.0001 # [V9] 슬리피지 수동 가산 (살 땐 비싸게)
+                etp=atp[i]; esl=ats[i]
             else:
                 t_en_l = (l[i] < llp) if o_m_l == 'limits' else (c[i] < llp)
                 if t_en_l:
-                    en[i]=True; eid=2; pos=True; ep=llp if o_m_l=='limits' else c[i]; pr[i]=ep; etp=atp[i]; esl=ats[i]; sz[i]=0.995
+                    en[i]=True; eid=2; pos=True; ep=llp if o_m_l=='limits' else c[i]
+                    pr[i] = ep * 1.0001
+                    etp=atp[i]; esl=ats[i]
         else:
             if eid == 1: # HL Case
                 tf, ta = ep*(1+tph), ep + 2.0*etp
@@ -118,7 +121,9 @@ def sim_final_nb(h, l, c, hlp_raw, ll_p, atp, ats, trm, inst_num, use_tr, o_m_h,
                 sf, sa = ep*(1-slh), ep - 4.0*esl
                 slp = sf if slice_t=='Fixed' else (sa if slice_t=='ATR' else max(sf, sa))
                 if use_tr and c[i] < trm[i] and c[i-1] >= trm[i-1]:
-                    ex[i], pr[i], sz[i], pos = True, c[i], 1.0, False; continue
+                    ex[i], pos = True, False
+                    pr[i] = c[i] * 0.9999 # [V9] 팔 땐 싸게
+                    continue
                 t_ex = (h[i]>=tpp or l[i]<=slp) if e_m_h=='limits' else (c[i]>=tpp or c[i]<=slp)
                 e_act = e_m_h
             else: # LL Case
@@ -128,19 +133,16 @@ def sim_final_nb(h, l, c, hlp_raw, ll_p, atp, ats, trm, inst_num, use_tr, o_m_h,
             if t_ex:
                 xp = (tpp if h[i]>=tpp else slp) if e_act=='limits' else c[i]
                 if not (np.isfinite(xp) and xp > 0): xp = c[i] # 최종 방어
-                if inst_num == 1:
-                    ex[i], pr[i], sz[i], pos = True, xp, 1.0, False
-                elif pf == 0:
-                    ex[i], pr[i], sz[i], pf, bfe = True, xp, 0.5, 1, i
-                elif i > bfe:
-                    ex[i], pr[i], sz[i], pos = True, xp, 1.0, False
-    return en, ex, pr, sz
+                # [V9] 분할 청산 버리고 무조건 전량 매도
+                ex[i], pos = True, False
+                pr[i] = xp * 0.9999 
+    return en, ex, pr
 
 actual_start = int(max(warmup, 1 + h_int) + 10)
-en, ex, pr, sz = sim_final_nb(h_np, l_np, c_np, hl_p_raw, ll_p_raw, atr_tp, atr_sl, tr_ma, inst, tr_hl, o_m_hl, o_m_ll, e_m_hl, e_m_ll, tp_hl_type, sl_hl_type, h_int, tp_hl_per, sl_hl_per, tp_ll_per, sl_ll_per, actual_start)
+en, ex, pr = sim_final_nb(h_np, l_np, c_np, hl_p_raw, ll_p_raw, atr_tp, atr_sl, tr_ma, inst, tr_hl, o_m_hl, o_m_ll, e_m_hl, e_m_ll, tp_hl_type, sl_hl_type, h_int, tp_hl_per, sl_hl_per, tp_ll_per, sl_ll_per, actual_start)
 
-# [V5 핵심] 자본금 대폭 상향으로 미세 수수료로 인한 잔고 NaN 방지 및 수량 체계 안정화
-portfolio = vbt.Portfolio.from_signals(data['Close'], en, ex, price=pr, size=sz, size_type='percent', init_cash=1000000.0, fees=0.0008, slippage=slippage)
+# [V9 최후통첩] size 인자 완벽 제거, 기본 100% 매매만 수행 (슬리피지는 수동 반영됨)
+portfolio = vbt.Portfolio.from_signals(data['Close'], en, ex, price=pr, init_cash=1000000.0, fees=0.0008)
 
 try:
     port_stats = portfolio.stats()
