@@ -47,14 +47,31 @@ with st.sidebar:
     trials = st.number_input("탐색수", 10, 10000, 100)
     workers = st.number_input("워커 수 (병렬 엔진)", 2, 8, 4)
     
-    # 엔진 변경 시 코드 자동 리로드
+    # 엔진 변경 시 코드 자동 리로드 (캐시 무시하고 파일에서 직독)
+    def load_code(engine):
+        try:
+            if engine == "Vectorbt":
+                with open("D:/Antigravity/백테스트 사용/백테스트 전략 코드(vectorbt).txt", "r", encoding="utf-8") as f:
+                    return f.read()
+            else:
+                with open("D:/Antigravity/백테스트 사용/백테스트 전략 코드(backtrader).txt", "r", encoding="utf-8") as f:
+                    return f.read()
+        except:
+            return ""
+
     if "prev_eng" not in st.session_state or st.session_state["prev_eng"] != eng:
-        from core.templates import VECTORBT_STRATEGY, BACKTRADER_STRATEGY
-        st.session_state["strategy_code"] = VECTORBT_STRATEGY if eng == "Vectorbt" else BACKTRADER_STRATEGY
+        st.session_state["strategy_code"] = load_code(eng)
         st.session_state["prev_eng"] = eng
 
     st.markdown("---")
-    btn_start = st.button("🚀 최적화 가동", type="primary")
+    st.warning("⚠️ 코드가 업데이트된 경우 반드시 아래 '최신 코드 불러오기'를 먼저 눌러주세요!")
+    c_btn1, c_btn2 = st.columns(2)
+    with c_btn1:
+        if st.button("🔄 최신 코드 불러오기"):
+            st.session_state["strategy_code"] = load_code(eng)
+            st.rerun()
+    with c_btn2:
+        btn_start = st.button("🚀 최적화 가동", type="primary")
 
 # ----------------- [메인 화면] -----------------
 st.title("📊 QUANTUM TERMINAL")
