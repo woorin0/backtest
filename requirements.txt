@@ -10,5 +10,5 @@ python-dotenv
 celery
 redis
 optuna
-optuna_integration
+optuna-integration
 SQLAlchemy

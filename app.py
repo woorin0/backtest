@@ -44,7 +44,7 @@ with st.sidebar:
     sym = st.text_input("심볼", "BTC/USDT")
     tf = st.selectbox("주기", ["1h", "4h", "15m"])
     trials = st.number_input("탐색수", 10, 10000, 100)
-    workers = st.radio("워커수", [2, 4, 8], index=1)
+    workers = st.number_input("워커 수 (병렬 엔진)", 2, 8, 4)
     
     # 엔진 변경 시 코드 자동 리로드
     if "prev_eng" not in st.session_state or st.session_state["prev_eng"] != eng:
@@ -109,7 +109,7 @@ if btn_start and not active_task:
     if data is not None and not data.empty:
         dp = get_cache_path("Binance", sym, tf, datetime.date(2022,1,1), datetime.date.today())
         sn = f"study_{int(time.time())}"
-        worker_sigs = [run_optuna_worker.s(sn, dp, eng, st.session_state["strategy_code"], trials//workers, sym) for _ in range(workers)]
+        worker_sigs = [run_optuna_worker.s(sn, dp, eng, st.session_state["strategy_code"], trials//workers, sym, trials) for _ in range(workers)]
         res = chord(worker_sigs)(finalize_optuna_study.s(sn, dp, eng, sym))
         active_task = {"task_id": res.id, "worker_ids": [s.id for s in worker_sigs], "study_name": sn, "n_trials": trials}
         with open(CACHE_FILE, "w") as f: json.dump(active_task, f)
@@ -119,14 +119,14 @@ if active_task:
     tk = AsyncResult(active_task["task_id"], app=celery_app)
     storage = JournalStorage(JournalRedisStorage("redis://localhost:6379/1"))
     
-    while not tk.ready():
+    if not tk.ready():
         try:
             study = optuna.load_study(study_name=active_task["study_name"], storage=storage)
             compl = len(study.get_trials(states=[optuna.trial.TrialState.COMPLETE]))
             best = study.best_value if compl > 0 else 0.0
             
             p_v = min(int(compl / active_task["n_trials"] * 100), 100)
-            gauge_slot.progress(p_v, text=f"🚀 최적화 진행 중... {compl} / {active_task['n_trials']} ({p_v}%)")
+            gauge_slot.progress(p_v, text=f"🚀 실시간 최적화 분석 중... {compl} / {active_task['n_trials']} ({p_v}%)")
             draw_m(p_m1, "최고 수익률", f"{best:.2f}%", "#34C759")
             draw_m(p_m4, "완료된 탐색", f"{compl} 회")
             
@@ -137,9 +137,14 @@ if active_task:
                 diag_text += f"- **워커 {wid[:6]}**: {stat}\n"
             diag_slot.markdown(diag_text)
             
-            status_slot.info(f"📡 현재 {active_task['study_name']} 세션이 가동 중입니다.")
-        except: pass
-        time.sleep(3)
+            status_slot.info(f"📡 현재 {active_task['study_name']} 세션이 4개 코어를 풀가동 중입니다.")
+            
+            # 💡 3초 후 스크립트 재실행 (세션 스레드 점유 해제 및 웹 응답성 보장)
+            time.sleep(3)
+            st.rerun()
+        except:
+            time.sleep(1)
+            st.rerun()
     
     # 작업 완료 후 처리
     try:

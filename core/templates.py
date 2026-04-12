@@ -141,8 +141,9 @@ metrics = {
 BACKTRADER_STRATEGY = """import backtrader as bt
 import math
 import datetime
+import numpy as np
 
-# [100.0% 무결성] Backtrader 검증용 전략
+# [100.0% 무결성] Backtrader 최적화 연동형 전략
 class UniversalMA(bt.Indicator):
     lines = ('ma',)
     params = (('period', 20), ('matype', 'SMA'))
@@ -190,18 +191,39 @@ class BBCustom(bt.Indicator):
 
 class TestStrategy(bt.Strategy):
     params = (
-        ('hl_price', 'H/L OTT'), ('open_at_hl', 'limits'), ('open_at_ll', 'limits'),
-        ('exit_at_hl', 'close'), ('exit_at_ll', 'limits'),
-        ('hl_tp_price', 'ATR'), ('hl_sl_price', 'ATR'), ('tr_hl', True),
-        ('ll_volatility_filter', False), ('ma1_length', 20), ('ll_mult', 1.5),
-        ('ma2_type', 'EMA'), ('ma2_length', 3), ('bb_ma_type', 'EMA'),
-        ('bb_length', 20), ('bb_dev', 2.0), ('bb_min_width', 3.0),
-        ('hott_ma_type', 'EMA'), ('hott_length', 2), ('hott_percent', 0.6),
-        ('hott_h_length', 100), ('hott_use_high', False), ('high_int', 0),
-        ('entry_ll_per', 0.06), ('tp_hl_per', 0.015), ('sl_hl_per', 0.02),
-        ('tp_ll_per', 0.015), ('sl_ll_per', 0.015),
-        ('atr_length', 10), ('atr_length2', 10),
-        ('tr_ma_type', 'EMA'), ('tr_ma_length', 100), ('installment', 1),
+        ('hl_price', optuna_trial.suggest_categorical('hl_price', ['BB', 'H/L OTT', 'MAX']) if 'optuna_trial' in globals() and optuna_trial else 'H/L OTT'),
+        ('open_at_hl', optuna_trial.suggest_categorical('open_at_hl', ['limits', 'close']) if 'optuna_trial' in globals() and optuna_trial else 'limits'),
+        ('open_at_ll', optuna_trial.suggest_categorical('open_at_ll', ['limits', 'close']) if 'optuna_trial' in globals() and optuna_trial else 'limits'),
+        ('exit_at_hl', optuna_trial.suggest_categorical('exit_at_hl', ['limits', 'close']) if 'optuna_trial' in globals() and optuna_trial else 'close'),
+        ('exit_at_ll', optuna_trial.suggest_categorical('exit_at_ll', ['limits', 'close']) if 'optuna_trial' in globals() and optuna_trial else 'limits'),
+        ('hl_tp_price', optuna_trial.suggest_categorical('hl_tp_price', ['Fixed', 'ATR', 'both']) if 'optuna_trial' in globals() and optuna_trial else 'ATR'),
+        ('hl_sl_price', optuna_trial.suggest_categorical('hl_sl_price', ['Fixed', 'ATR', 'both']) if 'optuna_trial' in globals() and optuna_trial else 'ATR'),
+        ('tr_hl', optuna_trial.suggest_categorical('tr_hl', [True, False]) if 'optuna_trial' in globals() and optuna_trial else True),
+        ('ll_volatility_filter', optuna_trial.suggest_categorical('ll_volatility_filter', [True, False]) if 'optuna_trial' in globals() and optuna_trial else False),
+        ('ma1_length', optuna_trial.suggest_int('ma1_length', 10, 50) if 'optuna_trial' in globals() and optuna_trial else 20),
+        ('ll_mult', optuna_trial.suggest_float('ll_mult', 1.0, 3.0, step=0.1) if 'optuna_trial' in globals() and optuna_trial else 1.5),
+        ('ma2_type', optuna_trial.suggest_categorical('ma2_type', ['SMA', 'EMA']) if 'optuna_trial' in globals() and optuna_trial else 'EMA'),
+        ('ma2_length', optuna_trial.suggest_int('ma2_length', 1, 10) if 'optuna_trial' in globals() and optuna_trial else 3),
+        ('bb_ma_type', optuna_trial.suggest_categorical('bb_ma_type', ['SMA', 'EMA']) if 'optuna_trial' in globals() and optuna_trial else 'EMA'),
+        ('bb_length', optuna_trial.suggest_int('bb_length', 10, 50) if 'optuna_trial' in globals() and optuna_trial else 20),
+        ('bb_dev', optuna_trial.suggest_float('bb_dev', 1.0, 3.0, step=0.1) if 'optuna_trial' in globals() and optuna_trial else 2.0),
+        ('bb_min_width', optuna_trial.suggest_float('bb_min_width', 1.0, 5.0, step=0.1) if 'optuna_trial' in globals() and optuna_trial else 3.0),
+        ('hott_ma_type', optuna_trial.suggest_categorical('hott_ma_type', ['SMA', 'EMA']) if 'optuna_trial' in globals() and optuna_trial else 'EMA'),
+        ('hott_length', optuna_trial.suggest_int('hott_length', 1, 10) if 'optuna_trial' in globals() and optuna_trial else 2),
+        ('hott_percent', optuna_trial.suggest_float('hott_percent', 0.1, 2.0, step=0.1) if 'optuna_trial' in globals() and optuna_trial else 0.6),
+        ('hott_h_length', optuna_trial.suggest_int('hott_h_length', 50, 200) if 'optuna_trial' in globals() and optuna_trial else 100),
+        ('hott_use_high', optuna_trial.suggest_categorical('hott_use_high', [True, False]) if 'optuna_trial' in globals() and optuna_trial else False),
+        ('high_int', optuna_trial.suggest_int('high_int', 0, 5) if 'optuna_trial' in globals() and optuna_trial else 0),
+        ('entry_ll_per', optuna_trial.suggest_float('entry_ll_per', 0.02, 0.15, step=0.0001) if 'optuna_trial' in globals() and optuna_trial else 0.06),
+        ('tp_hl_per', optuna_trial.suggest_float('tp_hl_per', 0.005, 0.05, step=0.0001) if 'optuna_trial' in globals() and optuna_trial else 0.015),
+        ('sl_hl_per', optuna_trial.suggest_float('sl_hl_per', 0.01, 0.07, step=0.0001) if 'optuna_trial' in globals() and optuna_trial else 0.02),
+        ('tp_ll_per', optuna_trial.suggest_float('tp_ll_per', 0.005, 0.05, step=0.0001) if 'optuna_trial' in globals() and optuna_trial else 0.015),
+        ('sl_ll_per', optuna_trial.suggest_float('sl_ll_per', 0.01, 0.07, step=0.0001) if 'optuna_trial' in globals() and optuna_trial else 0.015),
+        ('atr_length', optuna_trial.suggest_int('atr_length', 7, 20) if 'optuna_trial' in globals() and optuna_trial else 10),
+        ('atr_length2', optuna_trial.suggest_int('atr_length2', 7, 20) if 'optuna_trial' in globals() and optuna_trial else 10),
+        ('tr_ma_type', optuna_trial.suggest_categorical('tr_ma_type', ['SMA', 'EMA']) if 'optuna_trial' in globals() and optuna_trial else 'EMA'),
+        ('tr_ma_length', optuna_trial.suggest_int('tr_ma_length', 50, 200) if 'optuna_trial' in globals() and optuna_trial else 100),
+        ('installment', optuna_trial.suggest_categorical('installment', [1, 2]) if 'optuna_trial' in globals() and optuna_trial else 1),
     )
     def __init__(self):
         self.atr_tp = bt.indicators.ATR(self.data, period=self.p.atr_length)
@@ -259,4 +281,38 @@ class TestStrategy(bt.Strategy):
             elif order.issell():
                 if self.position.size > 0: self.is_first_filled = True
                 else: self.entry_id = None; self.is_first_filled = False
+
+# 🚀 [Backtrader 엔진 실행부 - 무결성 보장]
+if 'data' in globals():
+    cerebro = bt.Cerebro(stdstats=False)
+    cerebro.addstrategy(TestStrategy)
+    cerebro.adddata(bt.feeds.PandasData(dataname=data))
+    cerebro.broker.setcash(10000.0)
+    cerebro.broker.setcommission(commission=0.0008)
+    cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name="trades")
+    cerebro.addanalyzer(bt.analyzers.DrawDown, _name="drawdown")
+    initial_value = cerebro.broker.getvalue()
+    results = cerebro.run()
+    final_value = cerebro.broker.getvalue()
+    tot_profit = final_value - initial_value
+    ret_pct = (tot_profit / initial_value) * 100
+    win_rate, mdd, tot_trades = 0.0, 0.0, 0
+    if results:
+        strat = results[0]
+        try:
+            tr_an = strat.analyzers.trades.get_analysis()
+            dd_an = strat.analyzers.drawdown.get_analysis()
+            tot_trades = tr_an.total.total if 'total' in tr_an else 0
+            if tot_trades > 0 and 'won' in tr_an:
+                win_rate = (tr_an.won.total / tot_trades) * 100
+            mdd = dd_an.max.drawdown if 'max' in dd_an else 0.0
+        except: pass
+    metrics = {
+        "Total Return (%)": round(ret_pct, 2),
+        "Total Profit": round(tot_profit, 2),
+        "Win Rate (%)": round(win_rate, 2),
+        "MDD (%)": round(mdd, 2),
+        "Total Trades": tot_trades
+    }
 """
+

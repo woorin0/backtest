@@ -43,3 +43,20 @@ def send_discord_error(error_msg: str, pair: str = "Unknown", engine: str = "Unk
         # 알림 전송 자체가 실패할 경우 표준 출력에 남겨 서버 로그에서 확인 가능하게 함
         print(f"[CRITICAL ERR] Discord Notify Failed: {str(e)}")
         return False, str(e)
+
+def send_discord_progress(study_name: str, pair: str, progress_pct: int, best_val: float):
+    """최적화 진행 상황(25/50/75%) 알림 전송"""
+    webhook_url = os.getenv("DISCORD_WEBHOOK_URL", "")
+    if not webhook_url or "YOUR_ID" in webhook_url:
+        return False
+        
+    try:
+        content = (
+            f"📊 **[백테스트 진행 현황 - {progress_pct}%]**\n"
+            f"> 대상: `{pair}` | 세션명: `{study_name}`\n"
+            f"> 현재 최고 수익률: **{best_val:.2f}%**"
+        )
+        requests.post(webhook_url, json={"content": content}, timeout=5)
+        return True
+    except:
+        return False
