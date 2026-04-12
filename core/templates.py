@@ -141,8 +141,8 @@ def sim_final_nb(h, l, c, hlp_raw, ll_p, atp, ats, trm, inst_num, use_tr, o_m_h,
 actual_start = int(max(warmup, 1 + h_int) + 10)
 en, ex, pr = sim_final_nb(h_np, l_np, c_np, hl_p_raw, ll_p_raw, atr_tp, atr_sl, tr_ma, inst, tr_hl, o_m_hl, o_m_ll, e_m_hl, e_m_ll, tp_hl_type, sl_hl_type, h_int, tp_hl_per, sl_hl_per, tp_ll_per, sl_ll_per, actual_start)
 
-# [V9 최후통첩] size 인자 완벽 제거, 기본 100% 매매만 수행 (슬리피지는 수동 반영됨)
-portfolio = vbt.Portfolio.from_signals(data['Close'], en, ex, price=pr, init_cash=1000000.0, fees=0.0008)
+# [V10] 수수료 차감 파산 방지를 위한 size_type='percent' 복구 (NaN 배열 버그 회피용 스칼라 1.0 적용)
+portfolio = vbt.Portfolio.from_signals(data['Close'], en, ex, price=pr, size=1.0, size_type='percent', init_cash=1000000.0, fees=0.0008)
 
 try:
     port_stats = portfolio.stats()
