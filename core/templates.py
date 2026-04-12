@@ -1,4 +1,4 @@
-# [100.0% 무결성] 전략 코드 템플릿 저장소 (에러 제로 보정 버전)
+# [100.0% 무결성] 전략 코드 템플릿 저장소 (에러 및 문법 보정 버전)
 
 VECTORBT_STRATEGY = """# [100.0% 무결성] Vectorbt 초정밀 가속 전략
 import vectorbt as vbt
@@ -7,13 +7,11 @@ import numpy as np
 from numba import njit
 
 # 1. 데이터 및 파라미터 로드
-# Numba 타입 에러 방지를 위한 명시적 타입 변환
 c_np = data['Close'].values.astype(np.float64)
 h_np = data['High'].values.astype(np.float64)
 l_np = data['Low'].values.astype(np.float64)
 
 if 'optuna_trial' in globals() and optuna_trial:
-    # HL/LL 독립 모드 및 파라미터 전수 연결
     hl_price_type = optuna_trial.suggest_categorical('hl_price', ['BB', 'H/L OTT', 'MAX'])
     bb_ma_type, bb_len = optuna_trial.suggest_categorical('bb_ma_type', ['SMA', 'EMA']), optuna_trial.suggest_int('bb_length', 10, 50)
     bb_dev_in, bb_min_w = optuna_trial.suggest_float('bb_dev', 1.0, 3.0, step=0.1), optuna_trial.suggest_float('bb_min_width', 1.0, 5.0, step=0.1)
@@ -45,11 +43,8 @@ else:
     tp_hl_per, sl_hl_per, tp_ll_per, sl_ll_per = 0.015, 0.02, 0.015, 0.015
     inst, tr_hl, slippage = 1, True, 0.0001
 
-# 🚨 지표 계산 대기 시간(Warm-up) 자동 계산
-# 모든 지표가 유의미한 값을 가질 때까지 기다리는 시점을 탐지
 warmup = max(bb_len, hott_h_len, ma1_len, ma2_len, tr_ma_len, atr_len, atr_len2, 10)
 
-# 2. 지표 계산
 def calc_ma(s, l, t): return s.ewm(span=l, adjust=True).mean() if t == 'EMA' else s.rolling(l).mean()
 
 bb_mid = calc_ma(data['Close'], bb_len, bb_ma_type)
@@ -80,12 +75,10 @@ def calc_hott_nb(mavg_np, percent):
 hott_v = calc_hott_nb(mavg_h_np, hott_per).astype(np.float64)
 hl_p_raw, ll_p_raw = (hott_v if hl_price_type == 'H/L OTT' else (bb_u if hl_price_type == 'BB' else np.maximum(hott_v, bb_u))), (ma2 * (1 - ma1 * ll_mult - en_ll_per) if ll_vol_filter else ma2 * (1 - en_ll_per))
 
-# 3. 초정밀 시뮬레이터
 @njit
 def sim_final_nb(h, l, c, hlp_raw, ll_p, atp, ats, trm, inst_num, use_tr, o_m_h, o_m_l, e_m_h, e_m_l, tp_t, slice_t, h_i, tph, slh, tpl, sll, start_idx):
     n = len(c); en, ex, pr, sz = np.zeros(n, dtype=np.bool_), np.zeros(n, dtype=np.bool_), np.zeros(n), np.zeros(n)
     pos, ep, etp, esl, pf, bfe, eid = False, 0.0, 0.0, 0.0, 0, -1, 0
-    # 🚨 보정된 start_idx부터 시뮬레이션 시작 (NaN 에러 원천 차단)
     for i in range(start_idx, n):
         hlp, llp = hlp_raw[i-1-h_i], ll_p[i-1]
         if not pos:
@@ -103,7 +96,7 @@ def sim_final_nb(h, l, c, hlp_raw, ll_p, atp, ats, trm, inst_num, use_tr, o_m_h,
                 sf, sa = ep*(1-slh), ep - 4.0*esl
                 slp = sf if slice_t=='Fixed' else (sa if slice_t=='ATR' else max(sf, sa))
                 if use_tr and c[i] < trm[i] and c[i-1] >= trm[i-1]:
-                    ex[i], pr[i], sz[i], pos = True, c[i], -1.0, False; continue
+                    ex[i], pr[i], sz[i], pos = True, c[i], 1.0, False; continue # 🚨 사이즈 양수 보정: 1.0
                 t_ex = (h[i]>=tpp or l[i]<=slp) if e_m_h=='limits' else (c[i]>=tpp or c[i]<=slp)
                 e_act = e_m_h
             else: # LL Case
@@ -113,21 +106,22 @@ def sim_final_nb(h, l, c, hlp_raw, ll_p, atp, ats, trm, inst_num, use_tr, o_m_h,
             if t_ex:
                 xp = (tpp if h[i]>=tpp else slp) if e_act=='limits' else c[i]
                 if inst_num == 1:
-                    ex[i], pr[i], sz[i], pos = True, xp, -1.0, False
+                    ex[i], pr[i], sz[i], pos = True, xp, 1.0, False # 🚨 사이즈 양수 보정: 1.0
                 elif pf == 0:
-                    ex[i], pr[i], sz[i], pf, bfe = True, xp, -0.5, 1, i
+                    ex[i], pr[i], sz[i], pf, bfe = True, xp, 0.5, 1, i # 🚨 사이즈 양수 보정: 0.5
                 elif i > bfe:
-                    ex[i], pr[i], sz[i], pos = True, xp, -1.0, False
+                    ex[i], pr[i], sz[i], pos = True, xp, 1.0, False # 🚨 사이즈 양수 보정: 1.0
     return en, ex, pr, sz
 
-# 시뮬레이션 시작 인덱스 결정
 actual_start = max(warmup, 1 + h_int)
 en, ex, pr, sz = sim_final_nb(h_np, l_np, c_np, hl_p_raw, ll_p_raw, atr_tp, atr_sl, tr_ma, inst, tr_hl, o_m_hl, o_m_ll, e_m_hl, e_m_ll, tp_hl_type, sl_hl_type, h_int, tp_hl_per, sl_hl_per, tp_ll_per, sl_ll_per, actual_start)
 portfolio = vbt.Portfolio.from_signals(data['Close'], en, ex, price=pr, size=sz, size_type='percent', init_cash=10000, fees=0.0008, slippage=slippage)
 
+# 🚨 지표 추출 문법 보정 (stats API 사용) 및 수익금 집계
+port_stats = portfolio.stats()
 metrics = {
     "Total Return (%)": round(portfolio.total_return()*100, 2),
-    "Win Rate (%)": round(portfolio.win_rate()*100, 2),
+    "Win Rate (%)": round(port_stats.get('Win Rate [%]', 0.0), 2),
     "MDD (%)": round(portfolio.max_drawdown()*100, 2),
     "Total Trades": int(portfolio.trades.count()),
     "Total Profit": round(portfolio.total_profit(), 2)
