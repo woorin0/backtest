@@ -48,16 +48,22 @@ with st.sidebar:
     workers = st.number_input("워커 수 (병렬 엔진)", 2, 8, 4)
     
     # 엔진 변경 시 코드 자동 리로드 (캐시 무시하고 파일에서 직독)
+    # 엔진 변경 시 코드 자동 리로드 (캐시 무시하고 파일에서 직독)
     def load_code(engine):
         try:
-            if engine == "Vectorbt":
-                with open("D:/Antigravity/백테스트 사용/백테스트 전략 코드(vectorbt).txt", "r", encoding="utf-8") as f:
-                    return f.read()
-            else:
-                with open("D:/Antigravity/백테스트 사용/백테스트 전략 코드(backtrader).txt", "r", encoding="utf-8") as f:
-                    return f.read()
-        except:
-            return ""
+            # 절대 경로의 백슬래시 문제를 피하기 위해 os.path.join 또는 raw string 권장
+            base_path = r"D:\Antigravity\백테스트 사용"
+            fn = f"백테스트 전략 코드({engine.lower()}).txt"
+            target_path = os.path.join(base_path, fn)
+            
+            if os.path.exists(target_path):
+                with open(target_path, "r", encoding="utf-8") as f:
+                    code = f.read()
+                    if code.strip():
+                        return code
+            return f"# [Error] '{fn}' 파일을 찾을 수 없거나 내용이 비어있습니다."
+        except Exception as e:
+            return f"# [Error] 코드 로드 실패: {str(e)}"
 
     if "prev_eng" not in st.session_state or st.session_state["prev_eng"] != eng:
         st.session_state["strategy_code"] = load_code(eng)
@@ -94,8 +100,8 @@ st.divider()
 
 # 📝 전략 에디터
 st.markdown("### 📝 전략 알고리즘")
-sc = st.text_area("Python Code", value=st.session_state.get("strategy_code", ""), height=350)
-if sc != st.session_state.get("strategy_code"): st.session_state["strategy_code"] = sc
+# session_state["strategy_code"]와 직접 연동 (key 사용)
+st.text_area("Python Code", key="strategy_code", height=350)
 
 st.divider()
 

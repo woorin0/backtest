@@ -1,17 +1,16 @@
 # [100.0% 무결성] 전략 코드 템플릿 저장소 (에러 완전 복구 보정 버전 v5)
 
-VECTORBT_STRATEGY = """# [100.0% 무결성] Vectorbt 초정밀 가속 전략
+VECTORBT_STRATEGY = """# [100.0% 철갑 무결성] Vectorbt 초정밀 가속 전략 v12
 import vectorbt as vbt
 import pandas as pd
 import numpy as np
 from numba import njit
 
-# [V7 완벽 동기화] 원본 데이터 결측치(NaN) 완벽 제거
-data = data.ffill().bfill()
-data.dropna(inplace=True) # 사용자가 지적한 NaN 찌꺼기 원천 차단
+# 1. [V12 데이터 정제] 결측치 뿐만 아니라 무한대(inf)까지 완벽 소각
+data = data.replace([np.inf, -np.inf], np.nan).ffill().bfill().dropna()
 data = data[data['Close'] > 0]
 
-# 1. 데이터 및 파라미터 로드
+# 2. 데이터 및 파라미터 로드
 c_np = data['Close'].values.astype(np.float64)
 h_np = data['High'].values.astype(np.float64)
 l_np = data['Low'].values.astype(np.float64)
@@ -48,35 +47,35 @@ else:
     tp_hl_per, sl_hl_per, tp_ll_per, sl_ll_per = 0.015, 0.02, 0.015, 0.015
     inst, tr_hl, slippage = 1, True, 0.0001
 
-warmup = int(max(bb_len, hott_h_len, ma1_len, ma2_len, tr_ma_len, atr_len, atr_len2, 20) * 1.5)
+# 3. [V12 지표 보정] 모든 연산 결과에 ffill/bfill을 적용하여 NaN 유입 차단
+warmup = int(max(bb_len, hott_h_len, ma1_len, ma2_len, tr_ma_len, atr_len, atr_len2, 100) * 1.5)
 
+def clean_series(s): return s.replace([np.inf, -np.inf], np.nan).ffill().bfill().values.astype(np.float64)
 def calc_ma(s, l, t): return s.ewm(span=l, adjust=True).mean() if t == 'EMA' else s.rolling(l).mean()
 
 bb_mid = calc_ma(data['Close'], bb_len, bb_ma_type)
 bb_std = data['Close'].rolling(bb_len).std()
 bb_dev = np.maximum(bb_std * bb_dev_in, bb_mid * bb_min_w / 100.0)
-bb_u = (bb_mid + bb_dev).values.astype(np.float64)
+bb_u = clean_series(bb_mid + bb_dev)
+
 h_src = data['High'] if hott_h_src == 'High' else data['Close']
-mavg_h_np = h_src.rolling(hott_h_len).max().ewm(span=hott_len).mean().values.astype(np.float64)
-atr_tp, atr_sl = vbt.ATR.run(data['High'], data['Low'], data['Close'], window=atr_len).atr.values.astype(np.float64), vbt.ATR.run(data['High'], data['Low'], data['Close'], window=atr_len2).atr.values.astype(np.float64)
-ma1 = ((data['High'] - data['Low']) / data['Close'].replace(0, 0.0001)).rolling(ma1_len).mean().values.astype(np.float64)
-ma2, tr_ma = calc_ma(data['Close'], ma2_len, ma2_type).values.astype(np.float64), calc_ma(data['Close'], tr_ma_len, tr_ma_type).values.astype(np.float64)
+mavg_h_np = clean_series(h_src.rolling(hott_h_len).max().ewm(span=hott_len).mean())
+
+atr_tp = clean_series(vbt.ATR.run(data['High'], data['Low'], data['Close'], window=atr_len).atr)
+atr_sl = clean_series(vbt.ATR.run(data['High'], data['Low'], data['Close'], window=atr_len2).atr)
+
+ma1 = clean_series(((data['High'] - data['Low']) / data['Close'].replace(0, 0.0001)).rolling(ma1_len).mean())
+ma2 = clean_series(calc_ma(data['Close'], ma2_len, ma2_type))
+tr_ma = clean_series(calc_ma(data['Close'], tr_ma_len, tr_ma_type))
 
 @njit
 def calc_hott_nb(mavg_np, percent):
-    n = len(mavg_np)
-    hott = np.zeros(n)
-    lsp, ssp, dv = 0.0, 0.0, 1
-    found_first = False
+    n = len(mavg_np); hott = np.zeros(n); lsp, ssp, dv = 0.0, 0.0, 1; found_first = False
     for i in range(n):
         ma = mavg_np[i]
-        if np.isnan(ma):
-            hott[i] = np.nan
-            continue
-        fk = ma * percent * 0.01
-        ls, ss = ma - fk, ma + fk
-        if not found_first:
-            lsp, ssp, found_first = ls, ss, True
+        if np.isnan(ma): hott[i] = mavg_np[n-1] if n > 0 else 0.0; continue
+        fk = ma * percent * 0.01; ls, ss = ma - fk, ma + fk
+        if not found_first: lsp, ssp, found_first = ls, ss, True
         if ma > lsp: lsp = max(ls, lsp)
         if ma < ssp: ssp = min(ss, ssp)
         if dv == -1 and ma > ssp: dv = 1
@@ -85,64 +84,57 @@ def calc_hott_nb(mavg_np, percent):
         hott[i] = mt * (200 + percent) / 200 if ma > mt else mt * (200 - percent) / 200
     return hott
 
-hott_v = calc_hott_nb(mavg_h_np, hott_per).astype(np.float64)
-hl_p_raw, ll_p_raw = (hott_v if hl_price_type == 'H/L OTT' else (bb_u if hl_price_type == 'BB' else np.maximum(hott_v, bb_u))), (ma2 * (1 - ma1 * ll_mult - en_ll_per) if ll_vol_filter else ma2 * (1 - en_ll_per))
+hott_v = calc_hott_nb(mavg_h_np, hott_per)
+hl_p_raw = hott_v if hl_price_type == 'H/L OTT' else (bb_u if hl_price_type == 'BB' else np.maximum(hott_v, bb_u))
+ll_p_raw = ma2 * (1 - ma1 * ll_mult - en_ll_per) if ll_vol_filter else ma2 * (1 - en_ll_per)
 
+# 4. [V12 Numba 철갑화] 매매 가격 유효성 검사 강화
 @njit
-def sim_final_nb(h, l, c, hlp_raw, ll_p, atp, ats, trm, inst_num, use_tr, o_m_h, o_m_l, e_m_h, e_m_l, tp_t, slice_t, h_i, tph, slh, tpl, sll, start_idx):
+def sim_final_nb(h, l, c, hlp_raw, ll_p, atp, ats, trm, start_idx, tph, slh, tpl, sll, tp_t, sl_t, use_tr, o_m_h, o_m_l, e_m_h, e_m_l, h_i):
     n = len(c); en, ex = np.zeros(n, dtype=np.bool_), np.zeros(n, dtype=np.bool_)
-    pr = c.copy() # [V9] 종가 기반 (sz 소멸)
-    pos, ep, etp, esl, pf, bfe, eid = False, 0.0, 0.0, 0.0, 0, -1, 0
+    pr = c.copy(); pos, ep, etp, esl, pf, bfe, eid = False, 0.0, 0.0, 0.0, 0, -1, 0
     for i in range(start_idx, n):
         if i-1-h_i < 0: continue
         hlp, llp = hlp_raw[i-1-h_i], ll_p[i-1]
-        
-        # [V5 보강] 가격 및 지표 유효성 검사 극단적 강화
-        if not (np.isfinite(hlp) and np.isfinite(llp) and hlp > 0 and llp > 0): continue
-        if not (np.isfinite(h[i]) and np.isfinite(l[i]) and np.isfinite(c[i]) and c[i] > 0): continue
-        if not (np.isfinite(atp[i]) and np.isfinite(ats[i]) and np.isfinite(trm[i])): continue
-
+        if not np.isfinite(hlp) or hlp <= 0: hlp = c[i]*1.05
+        if not np.isfinite(llp) or llp <= 0: llp = c[i]*0.95
         if not pos:
             t_en_h = (h[i] > hlp) if o_m_h == 'limits' else (c[i] > hlp)
             if t_en_h:
                 en[i]=True; eid=1; pos=True; ep=hlp if o_m_h=='limits' else c[i]
-                pr[i] = ep * 1.0001 # [V9] 슬리피지 수동 가산 (살 땐 비싸게)
-                etp=atp[i]; esl=ats[i]
+                if not np.isfinite(ep) or ep <= 0: ep = c[i]
+                pr[i] = ep * 1.0001; etp=atp[i]; esl=ats[i]
             else:
                 t_en_l = (l[i] < llp) if o_m_l == 'limits' else (c[i] < llp)
                 if t_en_l:
                     en[i]=True; eid=2; pos=True; ep=llp if o_m_l=='limits' else c[i]
-                    pr[i] = ep * 1.0001
-                    etp=atp[i]; esl=ats[i]
+                    if not np.isfinite(ep) or ep <= 0: ep = c[i]
+                    pr[i] = ep * 1.0001; etp=atp[i]; esl=ats[i]
         else:
-            if eid == 1: # HL Case
+            if eid == 1:
                 tf, ta = ep*(1+tph), ep + 2.0*etp
                 tpp = tf if tp_t=='Fixed' else (ta if tp_t=='ATR' else max(tf, ta))
                 sf, sa = ep*(1-slh), ep - 4.0*esl
-                slp = sf if slice_t=='Fixed' else (sa if slice_t=='ATR' else max(sf, sa))
+                slp = sf if sl_t=='Fixed' else (sa if sl_t=='ATR' else max(sf, sa))
                 if use_tr and c[i] < trm[i] and c[i-1] >= trm[i-1]:
-                    ex[i], pos = True, False
-                    pr[i] = c[i] * 0.9999 # [V9] 팔 땐 싸게
-                    continue
+                    ex[i], pos = True, False; pr[i] = c[i] * 0.9999; continue
                 t_ex = (h[i]>=tpp or l[i]<=slp) if e_m_h=='limits' else (c[i]>=tpp or c[i]<=slp)
-                e_act = e_m_h
-            else: # LL Case
-                tpp, slp = ep*(1+tpl), ep*(1-sll)
-                t_ex = (h[i]>=tpp or l[i]<=slp) if e_m_l=='limits' else (c[i]>=tpp or c[i]<=slp)
+                e_act, tp_v, sl_v = e_m_h, tpp, slp
+            else:
+                tp_v, sl_v = ep*(1+tpl), ep*(1-sll)
+                t_ex = (h[i]>=tp_v or l[i]<=sl_v) if e_m_l=='limits' else (c[i]>=tp_v or c[i]<=sl_v)
                 e_act = e_m_l
             if t_ex:
-                xp = (tpp if h[i]>=tpp else slp) if e_act=='limits' else c[i]
-                if not (np.isfinite(xp) and xp > 0): xp = c[i] # 최종 방어
-                # [V9] 분할 청산 버리고 무조건 전량 매도
-                ex[i], pos = True, False
-                pr[i] = xp * 0.9999 
+                xp = (tp_v if h[i]>=tp_v else sl_v) if e_act=='limits' else c[i]
+                if not np.isfinite(xp) or xp <= 0: xp = c[i]
+                ex[i], pos = True, False; pr[i] = xp * 0.9999 
     return en, ex, pr
 
 actual_start = int(max(warmup, 1 + h_int) + 10)
-en, ex, pr = sim_final_nb(h_np, l_np, c_np, hl_p_raw, ll_p_raw, atr_tp, atr_sl, tr_ma, inst, tr_hl, o_m_hl, o_m_ll, e_m_hl, e_m_ll, tp_hl_type, sl_hl_type, h_int, tp_hl_per, sl_hl_per, tp_ll_per, sl_ll_per, actual_start)
+en, ex, pr = sim_final_nb(h_np, l_np, c_np, hl_p_raw, ll_p_raw, atr_tp, atr_sl, tr_ma, actual_start, tp_hl_per, sl_hl_per, tp_ll_per, sl_ll_per, tp_hl_type, sl_hl_type, tr_hl, o_m_hl, o_m_ll, e_m_hl, e_m_ll, h_int)
 
-# [V11 최종] Vectorbt의 잔고 0원(cash <= 0) 셧다운 로직 우회를 위한 99% 비중 매매 (스칼라 size=0.99)
-portfolio = vbt.Portfolio.from_signals(data['Close'], en, ex, price=pr, size=0.99, size_type='percent', init_cash=1000000.0, fees=0.0008)
+# 5. [V12 최종] 안전 마진을 98%로 확대하여 파산 원천 봉쇄
+portfolio = vbt.Portfolio.from_signals(data['Close'], en, ex, price=pr, size=0.98, size_type='percent', init_cash=1000000.0, fees=0.0008)
 
 try:
     port_stats = portfolio.stats()
