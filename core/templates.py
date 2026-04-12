@@ -148,19 +148,34 @@ else:
         actual_start = int(max(warmup, 1 + h_int) + 10)
         en, ex, pr = sim_final_nb(h_np, l_np, c_np, hl_p_raw, ll_p_raw, atr_tp, atr_sl, tr_ma, actual_start, tp_hl_per, sl_hl_per, tp_ll_per, sl_ll_per, tp_hl_type, sl_hl_type, tr_hl, o_m_hl, o_m_ll, e_m_hl, e_m_ll, h_int)
 
-        # [V13] Vectorbt 입력 전 전사 조사 (NaN이 하나라도 있으면 기각)
-        if not (np.isfinite(pr).all() and np.isfinite(c_np).all()):
+        # [V14] 인덱스 동기화: 넘파이 배열을 원본 데이터 인덱스의 Series로 변환
+        # 인덱스 미매칭으로 인한 내부 NaN 생성을 원천 봉쇄
+        en_s = pd.Series(en, index=data.index)
+        ex_s = pd.Series(ex, index=data.index)
+        pr_s = pd.Series(pr, index=data.index)
+
+        # [V14] 최종 검문 2: Series 변환 후에도 유효한지 체크
+        if not (np.isfinite(pr_s.values).all() and np.isfinite(c_np).all()):
              metrics = {"Total Return (%)": 0.0, "Win Rate (%)": 0.0, "MDD (%)": 0.0, "Total Trades": 0, "Total Profit": 0.0}
         else:
-            # 안전 마진을 90%로 대폭 확대하여 파산 원천 봉쇄
-            portfolio = vbt.Portfolio.from_signals(data['Close'], en, ex, price=pr, size=0.9, size_type='percent', init_cash=1000000.0, fees=0.0008)
+            # 안전 마진(size=0.9), 정식 slippage(0.0001) 파라미터 사용
+            portfolio = vbt.Portfolio.from_signals(
+                data['Close'], en_s, ex_s, 
+                price=pr_s, 
+                size=0.9, 
+                size_type='percent', 
+                init_cash=1000000.0, 
+                fees=0.0008,
+                slippage=0.0001,
+                direction='longonly'
+            )
 
             try:
-                port_stats = portfolio.stats()
-                win_rate = float(port_stats.get('Win Rate [%]', 0.0))
-                total_return = float(getattr(portfolio, 'total_return', 0.0) * 100.0)
-                total_profit = float(getattr(portfolio, 'total_profit', 0.0))
-                max_drawdown = float(getattr(portfolio, 'max_drawdown', 0.0) * 100.0)
+                # stats() 이전에 간단한 결과 검사
+                win_rate = float(portfolio.stats().get('Win Rate [%]', 0.0))
+                total_return = float(portfolio.total_return * 100.0)
+                total_profit = float(portfolio.total_profit)
+                max_drawdown = float(portfolio.max_drawdown * 100.0)
                 total_trades = int(portfolio.trades.count())
             except:
                 win_rate, total_return, total_profit, max_drawdown, total_trades = 0.0, 0.0, 0.0, 0.0, 0
