@@ -17,6 +17,7 @@ from celery.result import AsyncResult
 from celery import chord
 from core.tasks import run_optuna_worker, finalize_optuna_study, celery_app
 from core.notifier import send_discord_error
+from celery import uuid
 
 # 환경 변수 로드
 load_dotenv()
@@ -82,9 +83,9 @@ if sc != st.session_state.get("strategy_code"): st.session_state["strategy_code"
 st.divider()
 
 # 📜 히스토리
-st.markdown("### 📜 리포트 아카이브 (최신 3개)")
+st.markdown("### 📜 리포트 아카이브 (최신 5개)")
 res_files = sorted(glob.glob("results/*.xlsx"), key=os.path.getmtime, reverse=True)
-for i, fp in enumerate(res_files[:3]):
+for i, fp in enumerate(res_files[:5]):
     fn = os.path.basename(fp)
     with st.container():
         cols = st.columns([4, 1])
@@ -97,11 +98,18 @@ CACHE_FILE = ".active_task.json"
 active_task = None
 if os.path.exists(CACHE_FILE):
     try:
-        with open(CACHE_FILE, "r") as f: meta = json.load(f)
-        task_check = AsyncResult(meta["task_id"], app=celery_app)
-        if not task_check.ready(): active_task = meta
-        else: os.remove(CACHE_FILE)
-    except: pass
+        with open(CACHE_FILE, "r") as f: 
+            meta = json.load(f)
+        if meta and isinstance(meta, dict) and "task_id" in meta:
+            task_check = AsyncResult(meta["task_id"], app=celery_app)
+            if not task_check.ready(): 
+                active_task = meta
+            else: 
+                os.remove(CACHE_FILE)
+        else:
+            os.remove(CACHE_FILE)
+    except Exception:
+        if os.path.exists(CACHE_FILE): os.remove(CACHE_FILE)
 
 if btn_start and not active_task:
     from core.data_fetcher import fetch_candles, get_cache_path
@@ -109,9 +117,18 @@ if btn_start and not active_task:
     if data is not None and not data.empty:
         dp = get_cache_path("Binance", sym, tf, datetime.date(2022,1,1), datetime.date.today())
         sn = f"study_{int(time.time())}"
-        worker_sigs = [run_optuna_worker.s(sn, dp, eng, st.session_state["strategy_code"], trials//workers, sym, trials) for _ in range(workers)]
+        # 워커 시그니처 및 ID 사전 생성 (상태 추적용)
+        worker_sigs = []
+        worker_ids = []
+        for _ in range(workers):
+            w_id = uuid()
+            sig = run_optuna_worker.s(sn, dp, eng, st.session_state["strategy_code"], trials//workers, sym, trials)
+            sig.set(task_id=w_id)
+            worker_sigs.append(sig)
+            worker_ids.append(w_id)
+            
         res = chord(worker_sigs)(finalize_optuna_study.s(sn, dp, eng, sym))
-        active_task = {"task_id": res.id, "worker_ids": [s.id for s in worker_sigs], "study_name": sn, "n_trials": trials}
+        active_task = {"task_id": res.id, "worker_ids": worker_ids, "study_name": sn, "n_trials": trials}
         with open(CACHE_FILE, "w") as f: json.dump(active_task, f)
         st.rerun()
 
@@ -122,19 +139,21 @@ if active_task:
     @st.fragment(run_every=3)
     def monitor_progress():
         try:
-            study = optuna.load_study(study_name=active_task["study_name"], storage=storage)
+            study = optuna.load_study(study_name=active_task.get("study_name"), storage=storage)
             compl = len(study.get_trials(states=[optuna.trial.TrialState.COMPLETE]))
             
             # 베스트 전략 상세 지표 파싱
             best_val, best_win, best_mdd = 0.0, 0.0, 0.0
             if compl > 0:
-                best_trial = study.best_trial
-                best_val = best_trial.value
-                best_win = best_trial.user_attrs.get('Win Rate (%)', 0.0)
-                best_mdd = best_trial.user_attrs.get('MDD (%)', 0.0)
+                try:
+                    best_trial = study.best_trial
+                    best_val = best_trial.value if best_trial.value is not None else 0.0
+                    best_win = best_trial.user_attrs.get('Win Rate (%)', 0.0)
+                    best_mdd = best_trial.user_attrs.get('MDD (%)', 0.0)
+                except: pass
             
-            p_v = min(int(compl / active_task["n_trials"] * 100), 100)
-            gauge_slot.progress(p_v, text=f"🚀 실시간 최적화 분석 중... {compl} / {active_task['n_trials']} ({p_v}%)")
+            p_v = min(int(compl / active_task.get("n_trials", 1) * 100), 100)
+            gauge_slot.progress(p_v, text=f"🚀 실시간 최적화 분석 중... {compl} / {active_task.get('n_trials')} ({p_v}%)")
             
             # 상단 4개 지표 카드 실시간 갱신
             draw_m(p_m1, "최고 수익률", f"{best_val:.2f}%", "#34C759")
@@ -149,7 +168,19 @@ if active_task:
                 diag_text += f"- **워커 {wid[:6]}**: {stat}\n"
             diag_slot.markdown(diag_text)
             
-            status_slot.info(f"📡 {active_task['study_name']} 세션이 4개 코어를 풀가동 중입니다.")
+            if not tk.ready():
+                if st.button("⛔ 실시간 백테스트 강제 중단", use_container_width=True, type="secondary"):
+                    # 1. 태스크 취소 (Chord + Workers)
+                    celery_app.control.revoke(active_task.get("task_id"), terminate=True)
+                    for wid in active_task.get("worker_ids", []):
+                        celery_app.control.revoke(wid, terminate=True)
+                    # 2. 캐시 삭제
+                    if os.path.exists(CACHE_FILE): os.remove(CACHE_FILE)
+                    st.success("🛰️ 모든 백그라운드 태스크를 강제 종료하고 리소스를 반환했습니다.")
+                    time.sleep(1)
+                    st.rerun()
+
+            status_slot.info(f"📡 {active_task.get('study_name')} 세션이 {workers}개 코어를 풀가동 중입니다.")
             
             if tk.ready():
                 st.rerun() # 작업 완료 시에만 전체 페이지 갱신
@@ -171,12 +202,13 @@ if active_task:
     
     # 작업 완료 후 처리
     try:
-        final = tk.get(timeout=5)
-        if final.get("status") == "SUCCESS":
+        final = tk.get(timeout=10)
+        if final and final.get("status") == "SUCCESS":
             st.balloons()
-            st.success(f"🏆 최적화 완료! 최고의 수익률: {final['best_value']:.2f}%")
-            with open(final["excel_file"], "rb") as f:
-                st.download_button("📥 상위 50개 상세 리포트 다운로드", f, os.path.basename(final["excel_file"]), type="primary")
+            st.success(f"🏆 최적화 완료! 최고의 수익률: {final.get('best_value', 0.0):.2f}%")
+            if final.get("excel_file") and os.path.exists(final["excel_file"]):
+                with open(final["excel_file"], "rb") as f:
+                    st.download_button("📥 상위 50개 상세 리포트 다운로드", f, os.path.basename(final["excel_file"]), type="primary")
             
             # 🚨 재시작을 위한 초기화 버튼
             if st.button("🧹 작업 초기화 및 다시 시작", use_container_width=True):
@@ -184,7 +216,11 @@ if active_task:
                 st.rerun()
     except Exception as e:
         status_slot.error(f"❌ 작업 결과 처리 중 오류: {str(e)}")
-        if st.button("🚨 강제 초기화"):
+        if st.button("🚨 시스템 강제 초기화 (태스크 포함)", use_container_width=True):
+            if active_task:
+                celery_app.control.revoke(active_task.get("task_id"), terminate=True)
+                for wid in active_task.get("worker_ids", []):
+                    celery_app.control.revoke(wid, terminate=True)
             if os.path.exists(CACHE_FILE): os.remove(CACHE_FILE)
             st.rerun()
 else:

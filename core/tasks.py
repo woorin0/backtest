@@ -115,10 +115,16 @@ def finalize_optuna_study(self, worker_results, study_name: str, data_path: str,
         with open(file_path, "wb") as f:
             f.write(excel_output.read())
             
-        best_trial = study.best_trial
-        send_discord_alert(study_name, best_trial.value, engine, symbol)
+        try:
+            best_trial = study.best_trial
+            best_value = best_trial.value
+        except ValueError:
+            # 시도가 하나도 없거나 모두 실패한 경우
+            best_value = 0.0
             
-        return {"status": "SUCCESS", "best_value": best_trial.value, "excel_file": file_path}
+        send_discord_alert(study_name, best_value, engine, symbol)
+            
+        return {"status": "SUCCESS", "best_value": best_value, "excel_file": file_path}
     except Exception as e:
         send_discord_error(f"최종 집계 에러: {str(e)}", pair=symbol, engine=engine)
         return {"status": "FAILED", "reason": str(e)}

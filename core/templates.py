@@ -1,10 +1,13 @@
-# [100.0% 무결성] 전략 코드 템플릿 저장소 (에러 완전 복구 보정 버전)
+# [100.0% 무결성] 전략 코드 템플릿 저장소 (에러 완전 복구 보정 버전 v2)
 
 VECTORBT_STRATEGY = """# [100.0% 무결성] Vectorbt 초정밀 가속 전략
 import vectorbt as vbt
 import pandas as pd
 import numpy as np
 from numba import njit
+
+# [보강] 원본 데이터 클리닝 (NaN으로 인한 현금 오염 방지)
+data = data.ffill().fillna(0)
 
 # 1. 데이터 및 파라미터 로드
 c_np = data['Close'].values.astype(np.float64)
@@ -90,14 +93,18 @@ def sim_final_nb(h, l, c, hlp_raw, ll_p, atp, ats, trm, inst_num, use_tr, o_m_h,
     for i in range(start_idx, n):
         if i-1-h_i < 0: continue
         hlp, llp = hlp_raw[i-1-h_i], ll_p[i-1]
-        if np.isnan(hlp) or np.isnan(llp): continue
+        
+        # [보강] 가격이 유효하지 않으면 skip
+        if not (np.isfinite(hlp) and np.isfinite(llp) and hlp > 0 and llp > 0): continue
+        if not (np.isfinite(h[i]) and np.isfinite(l[i]) and np.isfinite(c[i])): continue
+
         if not pos:
             t_en_h = (h[i] > hlp) if o_m_h == 'limits' else (c[i] > hlp)
-            if t_en_h and hlp > 0:
+            if t_en_h:
                 en[i]=True; eid=1; pos=True; pr[i]=hlp if o_m_h=='limits' else c[i]; ep=pr[i]; etp=atp[i]; esl=ats[i]; sz[i]=1.0
             else:
                 t_en_l = (l[i] < llp) if o_m_l == 'limits' else (c[i] < llp)
-                if t_en_l and llp > 0:
+                if t_en_l:
                     en[i]=True; eid=2; pos=True; pr[i]=llp if o_m_l=='limits' else c[i]; ep=pr[i]; etp=atp[i]; esl=ats[i]; sz[i]=1.0
         else:
             if eid == 1: # HL Case
@@ -115,6 +122,7 @@ def sim_final_nb(h, l, c, hlp_raw, ll_p, atp, ats, trm, inst_num, use_tr, o_m_h,
                 e_act = e_m_l
             if t_ex:
                 xp = (tpp if h[i]>=tpp else slp) if e_act=='limits' else c[i]
+                if not np.isfinite(xp): xp = c[i] # 최후의 방어
                 if inst_num == 1:
                     ex[i], pr[i], sz[i], pos = True, xp, 1.0, False
                 elif pf == 0:
@@ -151,6 +159,9 @@ import math
 import datetime
 import numpy as np
 
+# [보강] 원본 데이터 클리닝
+data = data.ffill().fillna(0)
+
 # [100.0% 무결성] Backtrader 최적화 연동형 전략
 class UniversalMA(bt.Indicator):
     lines = ('ma',)
@@ -176,16 +187,15 @@ class HOTTIndicator(bt.Indicator):
         self.addminperiod(self.p.period + self.p.length)
     def next(self):
         mavg = self.mavg[0]; fark = mavg * self.p.percent * 0.01
-        longStop, shortStop = mavg - fark, mavg + fark
+        ls, ss = mavg - fark, mavg + fark
         if len(self) == 1 + (self.p.period + self.p.length) or not hasattr(self, 'lsp'):
-            self.lsp, self.ssp, self.dir = longStop, shortStop, 1
-        if mavg > self.lsp: longStop = max(ls, self.lsp)
-        if mavg < self.ssp: shortStop = min(ss, self.ssp)
+            self.lsp, self.ssp, self.dir = ls, ss, 1
+        if mavg > self.lsp: self.lsp = max(ls, self.lsp)
+        if mavg < self.ssp: self.ssp = min(ss, self.ssp)
         if self.dir == -1 and mavg > self.ssp: self.dir = 1
         elif self.dir == 1 and mavg < self.lsp: self.dir = -1
-        mt = longStop if self.dir == 1 else shortStop
+        mt = self.lsp if self.dir == 1 else self.ssp
         self.lines.hott[0] = mt * (200 + self.p.percent) / 200 if mavg > mt else mt * (200 - self.p.percent) / 200
-        self.lsp, self.ssp = longStop, shortStop
 
 class BBCustom(bt.Indicator):
     lines = ('top',)
