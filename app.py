@@ -49,19 +49,20 @@ with st.sidebar:
     
     # 엔진 변경 시 코드 자동 리로드 (캐시 무시하고 파일에서 직독)
     # 엔진 변경 시 코드 자동 리로드 (캐시 무시하고 파일에서 직독)
+    # 엔진 변경 시 코드 자동 리로드 (로컬/서버 공용 상대 경로 시스템)
     def load_code(engine):
         try:
-            # 절대 경로의 백슬래시 문제를 피하기 위해 os.path.join 또는 raw string 권장
-            base_path = r"D:\Antigravity\백테스트 사용"
-            fn = f"백테스트 전략 코드({engine.lower()}).txt"
-            target_path = os.path.join(base_path, fn)
+            # os.getcwd()를 사용하여 현재 작업 디렉토리 기준 strategies 폴더 접근
+            strategies_dir = os.path.join(os.getcwd(), "strategies")
+            fn = f"{engine.lower()}.txt"
+            target_path = os.path.join(strategies_dir, fn)
             
             if os.path.exists(target_path):
                 with open(target_path, "r", encoding="utf-8") as f:
                     code = f.read()
                     if code.strip():
                         return code
-            return f"# [Error] '{fn}' 파일을 찾을 수 없거나 내용이 비어있습니다."
+            return f"# [Error] '{target_path}' 파일을 찾을 수 없거나 내용이 비어있습니다."
         except Exception as e:
             return f"# [Error] 코드 로드 실패: {str(e)}"
 

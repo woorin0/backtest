@@ -1,0 +1,271 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © dlrudals852
+
+import dokang/POA/17
+
+//@version=6
+strategy('Dual Long', overlay = true, default_qty_type = strategy.percent_of_equity, default_qty_value = 100, initial_capital = 400, pyramiding = 0, commission_value = 0.08, slippage = 3, use_bar_magnifier = true, margin_long = 0, margin_short = 0)
+
+// =========[ 공용 헬퍼 ]=========
+safe_epsilon = nz(syminfo.mintick, 0.000001)
+
+safeLimit(price) =>
+    na(price) or price <= 0 ? na : price
+
+safeStop(price) =>
+    na(price) or price <= 0 ? na : math.max(price, syminfo.mintick)
+
+toFrac(x) =>
+    x > 1 ? x * 0.01 : x
+
+f_hasQty(q) =>
+    not na(q) and q > 0
+
+// =========[ 기본 설정 ]=========
+EntryType   = 'both' // 고정
+HLPrice     = input.string(defval = 'H/L OTT', title = 'HL Price', options = ['BB', 'H/L OTT', 'MAX'], inline = 'BC', group = 'Basic Condition')
+OpenAtHL    = input.string('limits', title = 'Open At HL', inline = 'BC2', options = ['limits', 'close'], group = 'Basic Condition')
+OpenAtLL    = input.string('limits', title = 'Open At LL', inline = 'BC2', options = ['limits', 'close'], group = 'Basic Condition')
+ExitAtHL    = input.string('close', title = 'Exit At HL', inline = 'BC3', options = ['limits', 'close'], group = 'Basic Condition')
+ExitAtLL    = input.string('limits', title = 'Exit At LL', inline = 'BC3', options = ['limits', 'close'], group = 'Basic Condition')
+HL_TP_Price = input.string(defval = 'ATR', title = 'HL TP Price', options = ['Fixed', 'ATR', 'both'], inline = 'BC4', group = 'Basic Condition')
+LL_TP_Price = 'Fixed'
+HL_SL_Price = input.string(defval = 'ATR', title = 'HL SL Price', options = ['Fixed', 'ATR', 'both'], inline = 'BC5', group = 'Basic Condition')
+LL_SL_Price = 'Fixed'
+TR_HL       = input.string(defval = 'On', title = 'HL TR', options = ['On', 'Off'], inline = 'BC6', group = 'Basic Condition')
+
+// =========[ MAs ]=========
+LL_VolatilityFilter = input.bool(false, title = '변동성 포함', inline = 'MA1', group = 'LL Moving Average')
+
+ma(source, length, type) =>
+    type == 'SMA'  ? ta.sma(source, length) : type == 'EMA'  ? ta.ema(source, length) : type == 'SMMA (RMA)' ? ta.rma(source, length) : type == 'WMA'  ? ta.wma(source, length) : type == 'VWMA' ? ta.vwma(source, length) : na
+
+ma1_length = input.int(20, '변동성 길이', inline = 'MA1', minval = 1, group = 'LL Moving Average')
+safeClose_ma1 = math.max(nz(close), safe_epsilon)
+ma1 = ta.sma((high - low) / safeClose_ma1, ma1_length)
+
+LLmult = input.float(title = '변동성 배수', inline = 'MA1', defval = 1.5, step = 0.1, group = 'LL Moving Average')
+ma2_type = input.string('EMA', title = 'MA type', inline = 'MA2', options = ['SMA', 'EMA', 'SMMA (RMA)', 'WMA', 'VWMA'], group = 'LL Moving Average')
+ma2_length = input.int(3, title = 'MA length', inline = 'MA2', step = 1, minval = 1, group = 'LL Moving Average')
+ma2 = ma(close, ma2_length, ma2_type)
+
+// =========[ Bollinger Bands ]=========
+ma3_type   = input.string('EMA', title = 'MA 타입', inline = 'MA1', options = ['SMA', 'EMA', 'SMMA (RMA)', 'WMA', 'VWMA'], group = 'HL Bollinger Bands')
+ma3_source = close // '종가'로 고정
+ma3_length = input.int(20, title = 'MA 길이', inline = 'MA1', step = 1, minval = 1, group = 'HL Bollinger Bands')
+lbbMiddle  = ma(ma3_source, ma3_length, ma3_type)
+lbbDevInput = input.float(2.0, title = 'StdDev  ', minval = 0, step = 0.1, group = 'HL Bollinger Bands', inline = 'BB1')
+lbbMinWidth = input.float(3.0, title = 'Min Width', step = 0.1, group = 'HL Bollinger Bands', inline = 'BB1')
+lbbdev   = lbbDevInput * ta.stdev(close, ma3_length)
+lbbdev  := math.max(nz(lbbdev), nz(lbbMiddle) * lbbMinWidth / 100)
+lbbUpper = lbbMiddle + lbbdev
+lbbLower = lbbMiddle - lbbdev
+
+// =========[ H/L OTT ]=========
+length     = input.int(2, 'OTT 길이', step = 1, minval = 1, inline = 'HL1', group = 'HL H/L OTT')
+percent    = input.float(0.6, 'OTT Coeff', step = 0.1, minval = 0, inline = 'HL1', group = 'HL H/L OTT')
+hllength   = input.int(100, 'H 길이', minval = 1, step = 1, inline = 'HL1', group = 'HL H/L OTT')
+MAvg_type  = input.string('EMA', 'MA Type', options = ['SMA', 'EMA', 'SMMA (RMA)', 'WMA', 'VWMA'], inline = 'HL2', group = 'HL H/L OTT')
+High_src   = input.string(defval = 'close', title = 'H Source', options = ['High', 'close'], inline = 'HL2', group = 'HL H/L OTT')
+High_Int   = input.int(0, title = 'H Int', minval = 0, inline = 'HL2', group = 'HL H/L OTT')
+
+High_plot = High_src == 'High' ? high : close
+src  = ta.highest(High_plot, hllength)
+
+MAvg = ma(src, length, MAvg_type)
+fark = MAvg * percent * 0.01
+longStop     = MAvg - fark
+longStopPrev = nz(longStop[1], longStop)
+longStop    := not na(MAvg) and MAvg > longStopPrev ? math.max(longStop, longStopPrev) : longStop
+shortStop     = MAvg + fark
+shortStopPrev = nz(shortStop[1], shortStop)
+shortStop    := not na(MAvg) and MAvg < shortStopPrev ? math.min(shortStop, shortStopPrev) : shortStop
+dir = 1
+dir := nz(dir[1], dir)
+dir := dir == -1 and MAvg > shortStopPrev ? 1 : dir == 1 and MAvg < longStopPrev ? -1 : dir
+MT   = dir == 1 ? longStop : shortStop
+HOTT = MAvg > MT ? MT * (200 + percent) / 200 : MT * (200 - percent) / 200
+
+// =========[ HL/LL 플래그 ]=========
+HL = EntryType == 'HighLong' or EntryType == 'both'
+LL = EntryType == 'LowLong'  or EntryType == 'both'
+
+// =========[ Vars / ATR / TP-SL ]=========
+Entry_LL_per = input.float(0.06, title = 'Entry LL %', inline = 'VA0', minval = 0, step = 0.001, group = 'Percentage')
+TP_HL_per    = input.float(0.015, title = 'TP HL %', inline = 'VA2', minval = 0, step = 0.001, group = 'Percentage')
+SL_HL_per    = input.float(0.02,  title = 'SL HL %', inline = 'VA3', minval = 0, step = 0.001, group = 'Percentage')
+TP_LL_per    = input.float(0.015, title = 'TP LL %', inline = 'VA2', minval = 0, step = 0.001, group = 'Percentage')
+SL_LL_per    = input.float(0.015, title = 'SL LL %', inline = 'VA3', minval = 0, step = 0.001, group = 'Percentage')
+
+Entry_LL = toFrac(Entry_LL_per)
+TP_HL_f  = toFrac(TP_HL_per)
+SL_HL_f  = toFrac(SL_HL_per)
+TP_LL_f  = toFrac(TP_LL_per)
+SL_LL_f  = toFrac(SL_LL_per)
+
+atrLength   = input.int(defval = 10, title = 'HL TP ATR Length ', minval = 1, step = 1, inline = 'ATR1', group = 'ATR')
+openAtr     = nz(ta.atr(atrLength))
+longTakeProfitAtrMul = input.float(defval = 2.0, title = 'HL TP Multiplier ', minval = 1.0, step = 0.1, inline = 'ATR2', group = 'ATR')
+atrLength2  = input.int(defval = 10, title = 'HL SL ATR Length ', minval = 1, step = 1, inline = 'ATR3', group = 'ATR')
+HL_SL_openAtr = nz(ta.atr(atrLength2))
+HL_SL_AtrMul  = input.float(defval = 4.0, title = 'HL SL Multiplier ', minval = 1.0, step = 0.1, inline = 'ATR4', group = 'ATR')
+
+hasOpenTrade   = strategy.opentrades > 0
+lastEntryPrice = hasOpenTrade ? strategy.opentrades.entry_price(strategy.opentrades - 1) : na
+
+// =========[ TP/SL 계산 ]=========
+TP_Plot = float(na)
+if hasOpenTrade and not na(lastEntryPrice)
+    if HL_TP_Price == 'Fixed'
+        TP_Plot := lastEntryPrice * (1 + TP_HL_f)
+    if HL_TP_Price == 'ATR'
+        TP_Plot := lastEntryPrice + longTakeProfitAtrMul * openAtr
+    if HL_TP_Price == 'both'
+        TP_Plot := math.max(lastEntryPrice * (1 + TP_HL_f), lastEntryPrice + longTakeProfitAtrMul * openAtr)
+
+TP_Plot1 = float(na)
+if hasOpenTrade and not na(lastEntryPrice)
+    TP_Plot1 := lastEntryPrice * (1 + TP_LL_f)
+
+Stop_HL_Price = float(na)
+if hasOpenTrade and not na(lastEntryPrice)
+    if HL_SL_Price == 'Fixed'
+        Stop_HL_Price := lastEntryPrice * (1 - SL_HL_f)
+    if HL_SL_Price == 'ATR'
+        Stop_HL_Price := lastEntryPrice - HL_SL_AtrMul * HL_SL_openAtr
+    if HL_SL_Price == 'both'
+        Stop_HL_Price := math.max(lastEntryPrice * (1 - SL_HL_f), lastEntryPrice - HL_SL_AtrMul * HL_SL_openAtr)
+
+Stop_LL_Price = float(na)
+if hasOpenTrade and not na(lastEntryPrice)
+    Stop_LL_Price := lastEntryPrice * (1 - SL_LL_f)
+
+TP_HL = not na(TP_Plot) and TP_Plot <= close
+SL_HL = not na(Stop_HL_Price) and Stop_HL_Price >= close
+TP_LL = not na(TP_Plot1) and TP_Plot1 <= close
+SL_LL = not na(Stop_LL_Price) and Stop_LL_Price >= close
+
+// =========[ TR MA ]=========
+TR_ma_type   = input.string('EMA', 'TR MA', inline = 'TR ma', options = ['SMA', 'EMA', 'SMMA (RMA)', 'WMA', 'VWMA'], group = 'TR')
+TR_ma_source = close // '종가'로 고정
+TR_ma_length = input.int(100, '', inline = 'TR ma', minval = 1, group = 'TR')
+TR_ma = ma(TR_ma_source, TR_ma_length, TR_ma_type)
+closeLongPosition = ta.crossunder(close, TR_ma)
+plot(TR_ma, 'TR ma', color = color.red)
+
+// =========[ Plot Lines ]=========
+HLPlot = float(na)
+hott_val = HOTT
+if High_Int > 0 and bar_index > High_Int
+    hott_val := HOTT[High_Int]
+hott_plot = nz(hott_val) 
+
+if HLPrice == 'BB'
+    HLPlot := lbbUpper
+else if HLPrice == 'H/L OTT'
+    HLPlot := hott_plot
+else if HLPrice == 'MAX'
+    HLPlot := math.max(hott_plot, lbbUpper)
+    
+BasisPlot1 = lbbMiddle
+plot(HLPlot, 'Upper', color = color.new(color.green, 0))
+plot(BasisPlot1, 'Basis_HL', color = color.new(color.yellow, 0))
+
+LL_volat_cond = LL_VolatilityFilter ? ma2 * (1 - ma1 * LLmult - Entry_LL) : ma2 * (1 - Entry_LL)
+LLPlot = LL_volat_cond
+
+BasisPlot2 = ma2
+
+plot(LLPlot, 'Lower', color = color.new(color.blue, 0))
+plot(BasisPlot2, 'Basis_LL', color = color.new(color.yellow, 0))
+
+// =========[ LL 조건(단일 포지션) ]=========
+lastIsHL = strategy.opentrades > 0 ? (strategy.opentrades.entry_id(strategy.opentrades - 1) == 'HL') : false
+Pyra_LL_Cond = lastIsHL ? (strategy.position_size == 0) : true
+Pyra_LL = Pyra_LL_Cond
+
+HLenoughHist = bar_index > math.max(hllength, ma3_length)
+LLenoughHist = bar_index > ma2_length
+
+// =========[ 포지션 사이징 ]=========
+exchange_decimal = input.int(3, 'Exchange Decimal ', minval = 0, step = 1, inline = 'S1', group = 'Size')
+
+dec_in  = exchange_decimal
+dec_cap = math.min(math.max(dec_in, 0), 8)
+pow10   = math.pow(10, dec_cap)
+
+sumcapital   = strategy.initial_capital + strategy.netprofit
+safeCapital  = math.max(sumcapital, 0)
+HL_lot_size  = HL ? safeCapital : na
+Installment  = input.int(1, 'HL Installment', minval = 1, step = 1, inline = 'S1', group = 'Size')
+
+var float hl_entry_installment_qty = na
+
+safeClose_now = math.max(nz(close), safe_epsilon)
+
+canPlaceHL = not na(HLPlot) and HLPlot > 0
+canPlaceLL = not na(LLPlot) and LLPlot > 0
+
+float qty_hl = na
+if not na(HL_lot_size)
+    qty_hl_raw = (HL_lot_size / safeClose_now) * pow10
+    if not na(qty_hl_raw)
+        qty_hl := math.round(qty_hl_raw) / pow10
+qty_hl := na(qty_hl) or qty_hl <= 0 or qty_hl > 1000000000 ? na : qty_hl
+
+// —— HL 엔트리
+if HL and strategy.position_size == 0 and not na(qty_hl) and HLenoughHist
+    if OpenAtHL == 'limits' and canPlaceHL
+        strategy.entry('HL', strategy.long, stop = safeStop(HLPlot), qty = qty_hl, comment = 'HL', alert_message = POA.entry_message(''))
+        base_qty = safeCapital / safeClose_now
+        per_installment_qty = math.ceil(base_qty / Installment * pow10) / pow10
+        hl_entry_installment_qty := nz(per_installment_qty)
+    if OpenAtHL == 'close' and close > HLPlot and canPlaceHL
+        strategy.entry('HL', strategy.long, qty = qty_hl, comment = 'HL', alert_message = POA.entry_message(''))
+        base_qty = safeCapital / safeClose_now
+        per_installment_qty = math.ceil(base_qty / Installment * pow10) / pow10
+        hl_entry_installment_qty := nz(per_installment_qty)
+
+// —— LL 엔트리
+if LL and Pyra_LL and LLenoughHist
+    if OpenAtLL == 'limits' and canPlaceLL
+        strategy.entry('LL', strategy.long, limit = safeLimit(LLPlot), comment = 'LL', alert_message = POA.entry_message(''))
+    if OpenAtLL == 'close' and close < LLPlot and canPlaceLL
+        strategy.entry('LL', strategy.long, comment = 'LL', alert_message = POA.entry_message(''))
+
+// —— HL/LL 클로즈(시장가)
+if ExitAtHL == 'close' and barstate.isconfirmed and strategy.position_size > 0 and (TP_HL or SL_HL)
+    HL_qty = na(hl_entry_installment_qty) ? strategy.position_size : hl_entry_installment_qty
+    HL_qty := math.min(HL_qty, math.abs(strategy.position_size))
+    if f_hasQty(HL_qty)
+        strategy.close('HL', comment = 'Close_HL', qty = HL_qty, alert_message = POA.close_message(''))
+
+if ExitAtLL == 'close' and barstate.isconfirmed and strategy.position_size > 0 and (TP_LL or SL_LL)
+    strategy.close('LL', comment = 'Close_LL', alert_message = POA.close_message(''))
+
+// —— TP/SL 동시 지정 (limits 모드)
+if ExitAtHL == 'limits'
+    _tp = safeLimit(TP_Plot)
+    _sl = safeStop(Stop_HL_Price)
+    tp_ok = not na(_tp)
+    sl_ok = not na(_sl)
+    if tp_ok or sl_ok
+        HL_qty = na(hl_entry_installment_qty) ? strategy.position_size : hl_entry_installment_qty
+        HL_qty := math.min(HL_qty, math.abs(strategy.position_size))
+        if f_hasQty(HL_qty)
+            strategy.exit('Exit HL', 'HL', qty = HL_qty, limit = tp_ok ? _tp : na, stop = sl_ok ? _sl : na, alert_message = POA.exit_message(''))
+
+if ExitAtLL == 'limits'
+    _tp1 = safeLimit(TP_Plot1)
+    _sl1 = safeStop(Stop_LL_Price)
+    tp_ok1 = not na(_tp1)
+    sl_ok1 = not na(_sl1)
+    if tp_ok1 or sl_ok1
+        strategy.exit('Exit LL', 'LL', limit = tp_ok1 ? _tp1 : na, stop = sl_ok1 ? _sl1 : na, alert_message = POA.exit_message(''))
+
+// —— TR 조건 즉시 청산
+if TR_HL == 'On' and closeLongPosition and strategy.position_size > 0 and barstate.isconfirmed
+    strategy.close(id = 'HL', comment = 'TR HL', alert_message = POA.close_message(''))
+
+if strategy.position_size[1] > 0 and strategy.position_size == 0
+    hl_entry_installment_qty := na
