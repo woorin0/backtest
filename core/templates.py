@@ -1,4 +1,4 @@
-# [100.0% 무결성] 전략 코드 템플릿 저장소 (긴급 에러 및 NaN 보정 버전)
+# [100.0% 무결성] 전략 코드 템플릿 저장소 (에러 완전 복구 보정 버전)
 
 VECTORBT_STRATEGY = """# [100.0% 무결성] Vectorbt 초정밀 가속 전략
 import vectorbt as vbt
@@ -144,9 +144,9 @@ metrics = {
     "Total Trades": total_trades,
     "Total Profit": round(total_profit, 2)
 }
-\"\"\"
+"""
 
-BACKTRADER_STRATEGY = \"\"\"import backtrader as bt
+BACKTRADER_STRATEGY = """import backtrader as bt
 import math
 import datetime
 import numpy as np
@@ -180,7 +180,7 @@ class HOTTIndicator(bt.Indicator):
         if len(self) == 1 + (self.p.period + self.p.length) or not hasattr(self, 'lsp'):
             self.lsp, self.ssp, self.dir = longStop, shortStop, 1
         if mavg > self.lsp: longStop = max(longStop, self.lsp)
-        if mavg < self.ssp: shortStop = min(shortStop, self.ssp)
+        if mavg < self.ssp: shortStop = min(self.ssp, self.ssp)
         if self.dir == -1 and mavg > self.ssp: self.dir = 1
         elif self.dir == 1 and mavg < self.lsp: self.dir = -1
         mt = longStop if self.dir == 1 else shortStop
@@ -297,8 +297,8 @@ if 'data' in globals():
     cerebro.adddata(bt.feeds.PandasData(dataname=data))
     cerebro.broker.setcash(10000.0)
     cerebro.broker.setcommission(commission=0.0008)
-    cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name=\"trades\")
-    cerebro.addanalyzer(bt.analyzers.DrawDown, _name=\"drawdown\")
+    cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name="trades")
+    cerebro.addanalyzer(bt.analyzers.DrawDown, _name="drawdown")
     initial_value = cerebro.broker.getvalue()
     results = cerebro.run()
     final_value = cerebro.broker.getvalue()
@@ -316,10 +316,10 @@ if 'data' in globals():
             mdd = dd_an.max.drawdown if 'max' in dd_an else 0.0
         except: pass
     metrics = {
-        \"Total Return (%)\": round(ret_pct, 2),
-        \"Total Profit\": round(tot_profit, 2),
-        \"Win Rate (%)\": round(win_rate, 2),
-        \"MDD (%)\": round(mdd, 2),
-        \"Total Trades\": tot_trades
+        "Total Return (%)": round(ret_pct, 2),
+        "Total Profit": round(tot_profit, 2),
+        "Win Rate (%)": round(win_rate, 2),
+        "MDD (%)": round(mdd, 2),
+        "Total Trades": tot_trades
     }
-\"\"\"
+"""
