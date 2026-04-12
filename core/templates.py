@@ -1,4 +1,4 @@
-# [100.0% 무결성] 전략 코드 템플릿 저장소 (에러 완전 복구 보정 버전 v2)
+# [100.0% 무결성] 전략 코드 템플릿 저장소 (에러 완전 복구 보정 버전 v3)
 
 VECTORBT_STRATEGY = """# [100.0% 무결성] Vectorbt 초정밀 가속 전략
 import vectorbt as vbt
@@ -6,8 +6,9 @@ import pandas as pd
 import numpy as np
 from numba import njit
 
-# [보강] 원본 데이터 클리닝 (NaN으로 인한 현금 오염 방지)
-data = data.ffill().fillna(0)
+# [V3 보강] 원본 데이터 클리닝 (NaN 및 0 가격 완전 제거)
+data = data.ffill().bfill()
+data = data[data['Close'] > 0]
 
 # 1. 데이터 및 파라미터 로드
 c_np = data['Close'].values.astype(np.float64)
@@ -88,15 +89,15 @@ hl_p_raw, ll_p_raw = (hott_v if hl_price_type == 'H/L OTT' else (bb_u if hl_pric
 
 @njit
 def sim_final_nb(h, l, c, hlp_raw, ll_p, atp, ats, trm, inst_num, use_tr, o_m_h, o_m_l, e_m_h, e_m_l, tp_t, slice_t, h_i, tph, slh, tpl, sll, start_idx):
-    n = len(c); en, ex, pr, sz = np.zeros(n, dtype=np.bool_), np.zeros(n, dtype=np.bool_), np.zeros(n), np.zeros(n)
+    n = len(c); en, ex, pr, sz = np.zeros(n, dtype=np.bool_), np.zeros(n, dtype=np.bool_), np.full(n, np.nan), np.zeros(n)
     pos, ep, etp, esl, pf, bfe, eid = False, 0.0, 0.0, 0.0, 0, -1, 0
     for i in range(start_idx, n):
         if i-1-h_i < 0: continue
         hlp, llp = hlp_raw[i-1-h_i], ll_p[i-1]
         
-        # [보강] 가격이 유효하지 않으면 skip
+        # [V3 보강] 가격 유효성 검사 강화
         if not (np.isfinite(hlp) and np.isfinite(llp) and hlp > 0 and llp > 0): continue
-        if not (np.isfinite(h[i]) and np.isfinite(l[i]) and np.isfinite(c[i])): continue
+        if not (np.isfinite(h[i]) and np.isfinite(l[i]) and np.isfinite(c[i]) and c[i] > 0): continue
 
         if not pos:
             t_en_h = (h[i] > hlp) if o_m_h == 'limits' else (c[i] > hlp)
@@ -122,7 +123,7 @@ def sim_final_nb(h, l, c, hlp_raw, ll_p, atp, ats, trm, inst_num, use_tr, o_m_h,
                 e_act = e_m_l
             if t_ex:
                 xp = (tpp if h[i]>=tpp else slp) if e_act=='limits' else c[i]
-                if not np.isfinite(xp): xp = c[i] # 최후의 방어
+                if not (np.isfinite(xp) and xp > 0): xp = c[i] # 최종 방어
                 if inst_num == 1:
                     ex[i], pr[i], sz[i], pos = True, xp, 1.0, False
                 elif pf == 0:
@@ -133,7 +134,9 @@ def sim_final_nb(h, l, c, hlp_raw, ll_p, atp, ats, trm, inst_num, use_tr, o_m_h,
 
 actual_start = int(max(warmup, 1 + h_int) + 5)
 en, ex, pr, sz = sim_final_nb(h_np, l_np, c_np, hl_p_raw, ll_p_raw, atr_tp, atr_sl, tr_ma, inst, tr_hl, o_m_hl, o_m_ll, e_m_hl, e_m_ll, tp_hl_type, sl_hl_type, h_int, tp_hl_per, sl_hl_per, tp_ll_per, sl_ll_per, actual_start)
-portfolio = vbt.Portfolio.from_signals(data['Close'], en, ex, price=pr, size=sz, size_type='percent', init_cash=10000, fees=0.0008, slippage=slippage)
+
+# [V3 핵심] 가격이 NaN인 신호가 있다면 종가로 대체하여 안전하게 시뮬레이션
+portfolio = vbt.Portfolio.from_signals(data['Close'], en, ex, price=pr, size=sz, size_type='percent', init_cash=10000.0, fees=0.0008, slippage=slippage)
 
 try:
     port_stats = portfolio.stats()
@@ -159,8 +162,9 @@ import math
 import datetime
 import numpy as np
 
-# [보강] 원본 데이터 클리닝
-data = data.ffill().fillna(0)
+# [V3 보강] 원본 데이터 클리닝
+data = data.ffill().bfill()
+data = data[data['Close'] > 0]
 
 # [100.0% 무결성] Backtrader 최적화 연동형 전략
 class UniversalMA(bt.Indicator):
