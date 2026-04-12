@@ -15,7 +15,7 @@ except ImportError:
 from celery.result import AsyncResult
 from celery import chord
 from core.tasks import run_optuna_worker, finalize_optuna_study, celery_app
-from core.notifier import send_discord_error
+from core.notifier import send_discord_error, send_discord_alert
 
 # 환경 변수 로드
 load_dotenv()
@@ -28,7 +28,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# ----------------- [CSS: 디자인 및 모바일 최적화] -----------------
+# ----------------- [CSS: 디자인 최적화] -----------------
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Pretendard:wght@400;700;900&display=swap');
@@ -57,7 +57,10 @@ st.markdown("""
     div.stButton > button {
         border-radius: 10px;
         font-weight: 700;
-        height: 3.5em; /* 터치하기 더 편하게 확대 */
+        height: 3.5em;
+    }
+    .stProgress > div > div > div > div {
+        background-color: #007aff;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -121,7 +124,7 @@ def draw_metric(label, value, color="#121212"):
 p_m1.markdown(draw_metric("최고 수익률", "0.00%"), unsafe_allow_html=True)
 p_m2.markdown(draw_metric("추정 승률", "0.00%"), unsafe_allow_html=True)
 p_m3.markdown(draw_metric("최대 낙폭", "0.00%"), unsafe_allow_html=True)
-p_m4.markdown(draw_metric("진행률", f"0 / {trials}"), unsafe_allow_html=True)
+p_m4.markdown(draw_metric("탐색 진행", f"0 / {trials}"), unsafe_allow_html=True)
 
 st.divider()
 
@@ -129,6 +132,8 @@ st.divider()
 st.markdown("### 🛰️ 엔진 모니터링")
 gauge_slot = st.empty()
 status_slot = st.empty()
+# 🚨 최적화 중단 버튼 스페이스
+stop_btn_slot = st.empty()
 
 st.divider()
 
@@ -144,13 +149,12 @@ if sc != st.session_state["strategy_code"]: st.session_state["strategy_code"] = 
 
 st.divider()
 
-# 섹션 4: 리포트 보관소 (슬림화 버전)
+# 섹션 4: 리포트 보관소
 st.markdown("### 📜 최근 리포트 (최신 3개)")
 os.makedirs("results", exist_ok=True)
 res_files = glob.glob("results/*.xlsx")
 res_files.sort(key=os.path.getmtime, reverse=True)
 
-# 최신 3개만 노출하여 스크롤 압박 해소
 for i, fp in enumerate(res_files[:3]):
     fn = os.path.basename(fp)
     with st.container():
@@ -165,7 +169,7 @@ if len(res_files) > 3:
             with open(fp, "rb") as f:
                 st.download_button(label=f"📄 {fn}", data=f, file_name=fn, key=f"dl_extra_{i}")
 
-# ----------------- [백그라운드 로직] -----------------
+# ----------------- [백그라운드 로직 및 중단 제어] -----------------
 CACHE_FILE = ".active_task.json"
 active_task = None
 if os.path.exists(CACHE_FILE):
@@ -176,10 +180,12 @@ if os.path.exists(CACHE_FILE):
         else: os.remove(CACHE_FILE)
     except: pass
 
+# 🚀 최적화 시작 로직
 if btn_start and not active_task:
     from core.data_fetcher import fetch_candles, get_cache_path
     with st.spinner("📦 시장 데이터를 가져오는 중..."):
         data = fetch_candles(exch, sym, tf, sd, ed, lim)
+    
     if data is not None and not data.empty:
         dp = get_cache_path(exch, sym, tf, sd, ed)
         sn = f"study_{int(time.time())}"
@@ -189,12 +195,30 @@ if btn_start and not active_task:
         active_task = {"task_id": res.id, "study_name": sn, "n_trials": trials, "symbol": sym, "start_time": time.time()}
         with open(CACHE_FILE, "w") as f: json.dump(active_task, f)
         st.rerun()
+    else:
+        # 데이터 수집 실패 시 디스코드 알림
+        send_discord_error(f"데이터 수집 실패: {sym}", pair=sym, engine=eng)
+        st.error("데이터를 가져오는 데 실패했습니다. 심볼이나 네트워크 상태를 확인해 주세요.")
 
+# 🛰️ 모니터링 및 중단 로직
 if active_task:
     tk = AsyncResult(active_task["task_id"], app=celery_app)
-    storage = JournalStorage(JournalRedisStorage("redis://localhost:6379/1"))
     
+    # [제어] 최적화 중단 버튼
+    if stop_btn_slot.button("🛑 최적화 중단 (STOP)", type="secondary", use_container_width=True):
+        celery_app.control.revoke(active_task["task_id"], terminate=True)
+        if os.path.exists(CACHE_FILE): os.remove(CACHE_FILE)
+        st.warning("⚠️ 최적화가 사용자에 의해 중지되었습니다.")
+        time.sleep(2)
+        st.rerun()
+
+    storage = JournalStorage(JournalRedisStorage("redis://localhost:6379/1"))
     while not tk.ready():
+        # 오류 발생 시 디스코드 알림 체크
+        if tk.status == 'FAILURE':
+            send_discord_error("백그라운드 최적화 작업 중 치명적인 오류 발생", pair=active_task['symbol'], engine="CentralTask")
+            break
+
         try:
             study = optuna.load_study(study_name=active_task["study_name"], storage=storage)
             compl = len(study.get_trials(states=[optuna.trial.TrialState.COMPLETE]))
@@ -206,23 +230,28 @@ if active_task:
             p_m1.markdown(draw_metric("최고 수익률", f"{best:.2f}%", "#34C759" if best > 0 else "#121212"), unsafe_allow_html=True)
             p_m4.markdown(draw_metric("탐색 진행", f"{compl} / {active_task['n_trials']}"), unsafe_allow_html=True)
             
-            # 🚨 가독성 포인트: 0% 정체 대처 메시지
             if compl == 0:
                 elapsed = int(time.time() - (active_task.get("start_time") or time.time()))
-                if elapsed > 180: # 3분 지났는데 여백이면 워커 점검 유도
-                    status_slot.warning(f"⚠️ {elapsed}초 경과: 아직 첫 결과가 없습니다. **서버의 Celery Worker가 실행 중인지 확인해 주세요.** (Numba 컴파일 중일 수도 있습니다.)")
+                if elapsed > 180:
+                    status_slot.warning(f"⚠️ {elapsed}초 경과: 아직 결과가 없습니다. 워커 상태를 확인해 주세요.")
                 else:
-                    status_slot.markdown(f"<p style='text-align: center; color: #ff9800;'>⏳ <b>엔진 시동 중:</b> 첫 번째 분석 결과를 기다리고 있습니다. {elapsed}초 경과...</p>", unsafe_allow_html=True)
+                    status_slot.markdown(f"<p style='text-align: center; color: #ff9800;'>⏳ <b>엔진 시동 중:</b> 분석 대기 중... {elapsed}초 경과</p>", unsafe_allow_html=True)
             else:
-                status_slot.markdown(f"<p style='text-align: center; color: #007aff;'>📡 최고 {best:.2f}% 수익률 파라미터 탐지 완료... 계속 탐색 중</p>", unsafe_allow_html=True)
+                status_slot.markdown(f"<p style='text-align: center; color: #007aff;'>📡 최고 {best:.2f}% 수익률 탐지 완료... 계속 탐색 중</p>", unsafe_allow_html=True)
         except: pass
         time.sleep(3)
 
-    final = tk.get()
-    if os.path.exists(CACHE_FILE): os.remove(CACHE_FILE)
-    if final.get('status') == 'SUCCESS':
-        st.balloons()
-        p_m1.markdown(draw_metric("최종 결과", f"{final['best_value']:.2f}%", "#34C759"), unsafe_allow_html=True)
-        st.success(f"✅ 최적화 완료! 최고의 수익률: {final['best_value']:.2f}%")
-        with open(final['excel_file'], "rb") as f:
-            st.download_button("🚀 [중요] 최적 성과 리포트(Excel) 받기", f, f"Best_{active_task['symbol']}.xlsx", type="primary", use_container_width=True)
+    # 최종 결과 처리
+    try:
+        final = tk.get(timeout=5)
+        if os.path.exists(CACHE_FILE): os.remove(CACHE_FILE)
+        if final.get('status') == 'SUCCESS':
+            st.balloons()
+            p_m1.markdown(draw_metric("최종 결과", f"{final['best_value']:.2f}%", "#34C759"), unsafe_allow_html=True)
+            st.success(f"✅ 최적화 완료! 최고의 수익률: {final['best_value']:.2f}%")
+            with open(final['excel_file'], "rb") as f:
+                st.download_button("🚀 [중요] 최적 성과 리포트(Excel) 받기", f, f"Best_{active_task['symbol']}.xlsx", type="primary", use_container_width=True)
+    except Exception as e:
+        if "timeout" not in str(e).lower():
+            send_discord_error(f"최종 집계 중 오류: {str(e)}", pair=active_task.get('symbol', 'Unknown'))
+            st.error("결과 집계 중 오류가 발생했습니다. 디소코드를 확인해 주세요.")
