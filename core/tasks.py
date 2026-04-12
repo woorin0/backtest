@@ -15,6 +15,7 @@ import redis
 import json
 import subprocess
 import sys
+import traceback
 
 # [자가 치유] 필수 모듈 xlsxwriter 부재 시 자동 설치
 try:
@@ -74,20 +75,24 @@ def run_optuna_worker(self, study_name: str, data_path: str, engine: str, code_s
             nonlocal error_notified
             status_redis.set(f"worker_status_{worker_id}", f"최적화 중 ({trial.number}/{n_trials})", ex=600)
             
-            success, res = run_backtest(engine, code_str, data, optuna_trial=trial)
-            
-            if success and isinstance(res, dict):
-                # 성공 시 지표 저장
-                trial.set_user_attr('Win Rate (%)', res.get('Win Rate (%)', 0.0))
-                trial.set_user_attr('MDD (%)', res.get('MDD (%)', 0.0))
-                trial.set_user_attr('Total Trades', res.get('Total Trades', 0))
-                trial.set_user_attr('Total Profit', res.get('Total Profit', 0.0))
-                return float(res.get("Total Return (%)", 0.0))
-            else:
-                # 🚨 -999.0 대신 Pruned 처리하여 결과 오염 방지
-                if not error_notified:
-                    send_discord_error(f"전략 에러 발생: {str(res)}", pair=symbol, engine=engine)
-                    error_notified = True
+            try:
+                success, res = run_backtest(engine, code_str, data, optuna_trial=trial)
+                
+                if success and isinstance(res, dict):
+                    # 성공 시 지표 저장
+                    trial.set_user_attr('Win Rate (%)', res.get('Win Rate (%)', 0.0))
+                    trial.set_user_attr('MDD (%)', res.get('MDD (%)', 0.0))
+                    trial.set_user_attr('Total Trades', res.get('Total Trades', 0))
+                    trial.set_user_attr('Total Profit', res.get('Total Profit', 0.0))
+                    return float(res.get("Total Return (%)", 0.0))
+                else:
+                    # 🚨 -999.0 대신 Pruned 처리하여 결과 오염 방지
+                    if not error_notified:
+                        send_discord_error(f"전략 에러 발생: {str(res)}", pair=symbol, engine=engine)
+                        error_notified = True
+                    raise optuna.TrialPruned()
+            except Exception as e:
+                traceback.print_exc()
                 raise optuna.TrialPruned()
 
         study.optimize(objective, n_trials=n_trials, callbacks=[ProgressCallback(study_name, symbol, total_trials)])

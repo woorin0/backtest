@@ -1,4 +1,4 @@
-# [100.0% 무결성] 전략 코드 템플릿 저장소 (에러 완전 복구 보정 버전 v4)
+# [100.0% 무결성] 전략 코드 템플릿 저장소 (에러 완전 복구 보정 버전 v5)
 
 VECTORBT_STRATEGY = """# [100.0% 무결성] Vectorbt 초정밀 가속 전략
 import vectorbt as vbt
@@ -6,7 +6,7 @@ import pandas as pd
 import numpy as np
 from numba import njit
 
-# [V4 보강] 원본 데이터 클리닝 (NaN 및 0 가격 완전 제거)
+# [V5 보강] 원본 데이터 클리닝 (NaN 및 0 가격 완전 제거)
 data = data.ffill().bfill()
 data = data[data['Close'] > 0]
 
@@ -47,7 +47,7 @@ else:
     tp_hl_per, sl_hl_per, tp_ll_per, sl_ll_per = 0.015, 0.02, 0.015, 0.015
     inst, tr_hl, slippage = 1, True, 0.0001
 
-warmup = max(bb_len, hott_h_len, ma1_len, ma2_len, tr_ma_len, atr_len, atr_len2, 10)
+warmup = int(max(bb_len, hott_h_len, ma1_len, ma2_len, tr_ma_len, atr_len, atr_len2, 20) * 1.5)
 
 def calc_ma(s, l, t): return s.ewm(span=l, adjust=True).mean() if t == 'EMA' else s.rolling(l).mean()
 
@@ -95,18 +95,19 @@ def sim_final_nb(h, l, c, hlp_raw, ll_p, atp, ats, trm, inst_num, use_tr, o_m_h,
         if i-1-h_i < 0: continue
         hlp, llp = hlp_raw[i-1-h_i], ll_p[i-1]
         
-        # [V4 보강] 가격 유효성 검사 강화
+        # [V5 보강] 가격 및 지표 유효성 검사 극단적 강화
         if not (np.isfinite(hlp) and np.isfinite(llp) and hlp > 0 and llp > 0): continue
         if not (np.isfinite(h[i]) and np.isfinite(l[i]) and np.isfinite(c[i]) and c[i] > 0): continue
+        if not (np.isfinite(atp[i]) and np.isfinite(ats[i]) and np.isfinite(trm[i])): continue
 
         if not pos:
             t_en_h = (h[i] > hlp) if o_m_h == 'limits' else (c[i] > hlp)
             if t_en_h:
-                en[i]=True; eid=1; pos=True; pr[i]=hlp if o_m_h=='limits' else c[i]; ep=pr[i]; etp=atp[i]; esl=ats[i]; sz[i]=1.0
+                en[i]=True; eid=1; pos=True; ep=hlp if o_m_h=='limits' else c[i]; pr[i]=ep; etp=atp[i]; esl=ats[i]; sz[i]=1.0
             else:
                 t_en_l = (l[i] < llp) if o_m_l == 'limits' else (c[i] < llp)
                 if t_en_l:
-                    en[i]=True; eid=2; pos=True; pr[i]=llp if o_m_l=='limits' else c[i]; ep=pr[i]; etp=atp[i]; esl=ats[i]; sz[i]=1.0
+                    en[i]=True; eid=2; pos=True; ep=llp if o_m_l=='limits' else c[i]; pr[i]=ep; etp=atp[i]; esl=ats[i]; sz[i]=1.0
         else:
             if eid == 1: # HL Case
                 tf, ta = ep*(1+tph), ep + 2.0*etp
@@ -132,11 +133,11 @@ def sim_final_nb(h, l, c, hlp_raw, ll_p, atp, ats, trm, inst_num, use_tr, o_m_h,
                     ex[i], pr[i], sz[i], pos = True, xp, 0.0, False
     return en, ex, pr, sz
 
-actual_start = int(max(warmup, 1 + h_int) + 5)
+actual_start = int(max(warmup, 1 + h_int) + 10)
 en, ex, pr, sz = sim_final_nb(h_np, l_np, c_np, hl_p_raw, ll_p_raw, atr_tp, atr_sl, tr_ma, inst, tr_hl, o_m_hl, o_m_ll, e_m_hl, e_m_ll, tp_hl_type, sl_hl_type, h_int, tp_hl_per, sl_hl_per, tp_ll_per, sl_ll_per, actual_start)
 
-# [V4 핵심] 수량(sz) 배열이 NaN인 곳은 리밸런싱을 하지 않도록 하여 불필요한 연산을 차단하고 수치 안정성 확보
-portfolio = vbt.Portfolio.from_signals(data['Close'], en, ex, price=pr, size=sz, size_type='percent', init_cash=10000.0, fees=0.0008, slippage=slippage)
+# [V5 핵심] 자본금 대폭 상향으로 미세 수수료로 인한 잔고 NaN 방지 및 수량 체계 안정화
+portfolio = vbt.Portfolio.from_signals(data['Close'], en, ex, price=pr, size=sz, size_type='percent', init_cash=1000000.0, fees=0.0008, slippage=slippage)
 
 try:
     port_stats = portfolio.stats()
@@ -162,7 +163,7 @@ import math
 import datetime
 import numpy as np
 
-# [V4 보강] 원본 데이터 클리닝
+# [V5 보강] 원본 데이터 클리닝
 data = data.ffill().bfill()
 data = data[data['Close'] > 0]
 
@@ -309,7 +310,7 @@ if 'data' in globals():
     cerebro = bt.Cerebro(stdstats=False)
     cerebro.addstrategy(TestStrategy)
     cerebro.adddata(bt.feeds.PandasData(dataname=data))
-    cerebro.broker.setcash(10000.0)
+    cerebro.broker.setcash(1000000.0)
     cerebro.broker.setcommission(commission=0.0008)
     cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name="trades")
     cerebro.addanalyzer(bt.analyzers.DrawDown, _name="drawdown")
