@@ -64,7 +64,8 @@ def run_backtrader(code_str: str, data: pd.DataFrame, optuna_trial=None, externa
 def run_vectorbt(code_str: str, data: pd.DataFrame, optuna_trial=None):
     """Vectorbt를 이용한 동적 백테스트 실행 (무결성 및 수치 보호)"""
     exec_globals = globals().copy()
-    exec_globals.update({'data': data, 'optuna_trial': optuna_trial, 'np': np})
+    # [V13] 디버깅을 위해 로컬 네임스페이스 분리 및 초기 데이터 상태 기록
+    exec_globals.update({'data': data.copy(), 'optuna_trial': optuna_trial, 'np': np, 'pd': pd})
     
     try:
         exec(code_str, exec_globals)
@@ -81,7 +82,21 @@ def run_vectorbt(code_str: str, data: pd.DataFrame, optuna_trial=None):
         return True, metrics
         
     except Exception as e:
-        return False, f"Vectorbt 에러: {str(e)}"
+        # [V13] 상세 에러 리포팅: 어떤 데이터 포인트에서 NaN이 터졌는지 확인용
+        err_msg = str(e)
+        diag = f"Vectorbt 에러: {err_msg}"
+        if "cash cannot be NaN" in err_msg:
+            try:
+                # 템플릿 내부 변수들에 접근 시도
+                d_len = len(data)
+                en = exec_globals.get('en')
+                ex = exec_globals.get('ex')
+                pr = exec_globals.get('pr')
+                diag += f" | DataLen: {d_len}"
+                if en is not None: diag += f", EnLen: {len(en)}"
+                if pr is not None: diag += f", PrNaN: {np.isnan(pr).sum()}"
+            except: pass
+        return False, diag
 
 def run_backtest(engine: str, code_str: str, data: pd.DataFrame, optuna_trial=None):
     if engine.lower() == 'backtrader':
