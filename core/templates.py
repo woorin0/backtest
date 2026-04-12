@@ -6,8 +6,9 @@ import pandas as pd
 import numpy as np
 from numba import njit
 
-# [V5 보강] 원본 데이터 클리닝 (NaN 및 0 가격 완전 제거)
+# [V7 완벽 동기화] 원본 데이터 결측치(NaN) 완벽 제거
 data = data.ffill().bfill()
+data.dropna(inplace=True) # 사용자가 지적한 NaN 찌꺼기 원천 차단
 data = data[data['Close'] > 0]
 
 # 1. 데이터 및 파라미터 로드
@@ -89,7 +90,9 @@ hl_p_raw, ll_p_raw = (hott_v if hl_price_type == 'H/L OTT' else (bb_u if hl_pric
 
 @njit
 def sim_final_nb(h, l, c, hlp_raw, ll_p, atp, ats, trm, inst_num, use_tr, o_m_h, o_m_l, e_m_h, e_m_l, tp_t, slice_t, h_i, tph, slh, tpl, sll, start_idx):
-    n = len(c); en, ex, pr, sz = np.zeros(n, dtype=np.bool_), np.zeros(n, dtype=np.bool_), np.full(n, np.nan), np.full(n, np.nan)
+    n = len(c); en, ex = np.zeros(n, dtype=np.bool_), np.zeros(n, dtype=np.bool_)
+    pr = c.copy() # [V6 핵심] 평상시 비거래 구간에서도 NAV(자산가치) 평가가 가능하도록 종가 기반 초기화
+    sz = np.full(n, np.nan)
     pos, ep, etp, esl, pf, bfe, eid = False, 0.0, 0.0, 0.0, 0, -1, 0
     for i in range(start_idx, n):
         if i-1-h_i < 0: continue
@@ -115,7 +118,7 @@ def sim_final_nb(h, l, c, hlp_raw, ll_p, atp, ats, trm, inst_num, use_tr, o_m_h,
                 sf, sa = ep*(1-slh), ep - 4.0*esl
                 slp = sf if slice_t=='Fixed' else (sa if slice_t=='ATR' else max(sf, sa))
                 if use_tr and c[i] < trm[i] and c[i-1] >= trm[i-1]:
-                    ex[i], pr[i], sz[i], pos = True, c[i], 0.0, False; continue
+                    ex[i], pr[i], sz[i], pos = True, c[i], 1.0, False; continue
                 t_ex = (h[i]>=tpp or l[i]<=slp) if e_m_h=='limits' else (c[i]>=tpp or c[i]<=slp)
                 e_act = e_m_h
             else: # LL Case
@@ -126,11 +129,11 @@ def sim_final_nb(h, l, c, hlp_raw, ll_p, atp, ats, trm, inst_num, use_tr, o_m_h,
                 xp = (tpp if h[i]>=tpp else slp) if e_act=='limits' else c[i]
                 if not (np.isfinite(xp) and xp > 0): xp = c[i] # 최종 방어
                 if inst_num == 1:
-                    ex[i], pr[i], sz[i], pos = True, xp, 0.0, False
+                    ex[i], pr[i], sz[i], pos = True, xp, 1.0, False
                 elif pf == 0:
                     ex[i], pr[i], sz[i], pf, bfe = True, xp, 0.5, 1, i
                 elif i > bfe:
-                    ex[i], pr[i], sz[i], pos = True, xp, 0.0, False
+                    ex[i], pr[i], sz[i], pos = True, xp, 1.0, False
     return en, ex, pr, sz
 
 actual_start = int(max(warmup, 1 + h_int) + 10)
@@ -163,8 +166,9 @@ import math
 import datetime
 import numpy as np
 
-# [V5 보강] 원본 데이터 클리닝
+# [V7 완벽 동기화] 원본 데이터 결측치 완벽 제거
 data = data.ffill().bfill()
+data.dropna(inplace=True)
 data = data[data['Close'] > 0]
 
 # [100.0% 무결성] Backtrader 최적화 연동형 전략
