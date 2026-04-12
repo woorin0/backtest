@@ -1,13 +1,16 @@
-# [100.0% Parity] 전략 코드 템플릿 저장소
+# [100.0% 무결성] 전략 코드 템플릿 저장소 (에러 제로 보정 버전)
 
-VECTORBT_STRATEGY = """# [100.0% Parity] Vectorbt 초정밀 가속 전략
+VECTORBT_STRATEGY = """# [100.0% 무결성] Vectorbt 초정밀 가속 전략
 import vectorbt as vbt
 import pandas as pd
 import numpy as np
 from numba import njit
 
 # 1. 데이터 및 파라미터 로드
-c_np, h_np, l_np = data['Close'].values, data['High'].values, data['Low'].values
+# Numba 타입 에러 방지를 위한 명시적 타입 변환
+c_np = data['Close'].values.astype(np.float64)
+h_np = data['High'].values.astype(np.float64)
+l_np = data['Low'].values.astype(np.float64)
 
 if 'optuna_trial' in globals() and optuna_trial:
     # HL/LL 독립 모드 및 파라미터 전수 연결
@@ -42,18 +45,22 @@ else:
     tp_hl_per, sl_hl_per, tp_ll_per, sl_ll_per = 0.015, 0.02, 0.015, 0.015
     inst, tr_hl, slippage = 1, True, 0.0001
 
+# 🚨 지표 계산 대기 시간(Warm-up) 자동 계산
+# 모든 지표가 유의미한 값을 가질 때까지 기다리는 시점을 탐지
+warmup = max(bb_len, hott_h_len, ma1_len, ma2_len, tr_ma_len, atr_len, atr_len2, 10)
+
 # 2. 지표 계산
 def calc_ma(s, l, t): return s.ewm(span=l, adjust=True).mean() if t == 'EMA' else s.rolling(l).mean()
 
 bb_mid = calc_ma(data['Close'], bb_len, bb_ma_type)
 bb_std = data['Close'].rolling(bb_len).std()
 bb_dev = np.maximum(bb_std * bb_dev_in, bb_mid * bb_min_w / 100.0)
-bb_u = (bb_mid + bb_dev).values
+bb_u = (bb_mid + bb_dev).values.astype(np.float64)
 h_src = data['High'] if hott_h_src == 'High' else data['Close']
-mavg_h_np = h_src.rolling(hott_h_len).max().ewm(span=hott_len).mean().values
-atr_tp, atr_sl = vbt.ATR.run(data['High'], data['Low'], data['Close'], window=atr_len).atr.values, vbt.ATR.run(data['High'], data['Low'], data['Close'], window=atr_len2).atr.values
-ma1 = ((data['High'] - data['Low']) / data['Close'].replace(0, 0.0001)).rolling(ma1_len).mean().values
-ma2, tr_ma = calc_ma(data['Close'], ma2_len, ma2_type).values, calc_ma(data['Close'], tr_ma_len, tr_ma_type).values
+mavg_h_np = h_src.rolling(hott_h_len).max().ewm(span=hott_len).mean().values.astype(np.float64)
+atr_tp, atr_sl = vbt.ATR.run(data['High'], data['Low'], data['Close'], window=atr_len).atr.values.astype(np.float64), vbt.ATR.run(data['High'], data['Low'], data['Close'], window=atr_len2).atr.values.astype(np.float64)
+ma1 = ((data['High'] - data['Low']) / data['Close'].replace(0, 0.0001)).rolling(ma1_len).mean().values.astype(np.float64)
+ma2, tr_ma = calc_ma(data['Close'], ma2_len, ma2_type).values.astype(np.float64), calc_ma(data['Close'], tr_ma_len, tr_ma_type).values.astype(np.float64)
 
 @njit
 def calc_hott_nb(mavg_np, percent):
@@ -70,16 +77,17 @@ def calc_hott_nb(mavg_np, percent):
         hott[i] = mt * (200 + percent) / 200 if ma > mt else mt * (200 - percent) / 200
     return hott
 
-hott_v = calc_hott_nb(mavg_h_np, hott_per)
+hott_v = calc_hott_nb(mavg_h_np, hott_per).astype(np.float64)
 hl_p_raw, ll_p_raw = (hott_v if hl_price_type == 'H/L OTT' else (bb_u if hl_price_type == 'BB' else np.maximum(hott_v, bb_u))), (ma2 * (1 - ma1 * ll_mult - en_ll_per) if ll_vol_filter else ma2 * (1 - en_ll_per))
 
 # 3. 초정밀 시뮬레이터
 @njit
-def sim_final_nb(h, l, c, hlp_raw, llp_raw, atp, ats, trm, inst_num, use_tr, o_m_h, o_m_l, e_m_h, e_m_l, tp_t, sl_t, h_i, tph, slh, tpl, sll):
+def sim_final_nb(h, l, c, hlp_raw, ll_p, atp, ats, trm, inst_num, use_tr, o_m_h, o_m_l, e_m_h, e_m_l, tp_t, slice_t, h_i, tph, slh, tpl, sll, start_idx):
     n = len(c); en, ex, pr, sz = np.zeros(n, dtype=np.bool_), np.zeros(n, dtype=np.bool_), np.zeros(n), np.zeros(n)
     pos, ep, etp, esl, pf, bfe, eid = False, 0.0, 0.0, 0.0, 0, -1, 0
-    for i in range(1 + h_i, n):
-        hlp, llp = hlp_raw[i-1-h_i], llp_raw[i-1]
+    # 🚨 보정된 start_idx부터 시뮬레이션 시작 (NaN 에러 원천 차단)
+    for i in range(start_idx, n):
+        hlp, llp = hlp_raw[i-1-h_i], ll_p[i-1]
         if not pos:
             t_en_h = (h[i] > hlp) if o_m_h == 'limits' else (c[i] > hlp)
             if t_en_h and hlp > 0:
@@ -93,7 +101,7 @@ def sim_final_nb(h, l, c, hlp_raw, llp_raw, atp, ats, trm, inst_num, use_tr, o_m
                 tf, ta = ep*(1+tph), ep + 2.0*etp
                 tpp = tf if tp_t=='Fixed' else (ta if tp_t=='ATR' else max(tf, ta))
                 sf, sa = ep*(1-slh), ep - 4.0*esl
-                slp = sf if sl_t=='Fixed' else (sa if sl_t=='ATR' else max(sf, sa))
+                slp = sf if slice_t=='Fixed' else (sa if slice_t=='ATR' else max(sf, sa))
                 if use_tr and c[i] < trm[i] and c[i-1] >= trm[i-1]:
                     ex[i], pr[i], sz[i], pos = True, c[i], -1.0, False; continue
                 t_ex = (h[i]>=tpp or l[i]<=slp) if e_m_h=='limits' else (c[i]>=tpp or c[i]<=slp)
@@ -112,16 +120,25 @@ def sim_final_nb(h, l, c, hlp_raw, llp_raw, atp, ats, trm, inst_num, use_tr, o_m
                     ex[i], pr[i], sz[i], pos = True, xp, -1.0, False
     return en, ex, pr, sz
 
-en, ex, pr, sz = sim_final_nb(h_np, l_np, c_np, hl_p_raw, ll_p_raw, atr_tp, atr_sl, tr_ma, inst, tr_hl, o_m_hl, o_m_ll, e_m_hl, e_m_ll, tp_hl_type, sl_hl_type, h_int, tp_hl_per, sl_hl_per, tp_ll_per, sl_ll_per)
+# 시뮬레이션 시작 인덱스 결정
+actual_start = max(warmup, 1 + h_int)
+en, ex, pr, sz = sim_final_nb(h_np, l_np, c_np, hl_p_raw, ll_p_raw, atr_tp, atr_sl, tr_ma, inst, tr_hl, o_m_hl, o_m_ll, e_m_hl, e_m_ll, tp_hl_type, sl_hl_type, h_int, tp_hl_per, sl_hl_per, tp_ll_per, sl_ll_per, actual_start)
 portfolio = vbt.Portfolio.from_signals(data['Close'], en, ex, price=pr, size=sz, size_type='percent', init_cash=10000, fees=0.0008, slippage=slippage)
-metrics = {"Total Return (%)": round(portfolio.total_return()*100, 2), "Win Rate (%)": round(portfolio.win_rate()*100, 2), "MDD (%)": round(portfolio.max_drawdown()*100, 2), "Total Trades": int(portfolio.trades.count())}
+
+metrics = {
+    "Total Return (%)": round(portfolio.total_return()*100, 2),
+    "Win Rate (%)": round(portfolio.win_rate()*100, 2),
+    "MDD (%)": round(portfolio.max_drawdown()*100, 2),
+    "Total Trades": int(portfolio.trades.count()),
+    "Total Profit": round(portfolio.total_profit(), 2)
+}
 """
 
 BACKTRADER_STRATEGY = """import backtrader as bt
 import math
 import datetime
 
-# [100.0% Parity] Backtrader 검증용 전략
+# [100.0% 무결성] Backtrader 검증용 전략
 class UniversalMA(bt.Indicator):
     lines = ('ma',)
     params = (('period', 20), ('matype', 'SMA'))

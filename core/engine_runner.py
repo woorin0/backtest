@@ -5,13 +5,12 @@ import io
 
 def run_backtrader(code_str: str, data: pd.DataFrame, optuna_trial=None, external_params: dict = None):
     """Backtrader를 이용한 동적 백테스트 실행 (Hyper-Speed 최적화 버전)"""
-    # external_params가 있으면 suggest 로직 대신 직접 주입된 값을 사용하여 컴파일 오버헤드 방지
-    local_env = {'optuna_trial': optuna_trial, 'data': data, 'external_params': external_params}
+    # 전역과 지역을 통합하여 변수 접근 유실 방지
+    exec_globals = globals().copy()
+    exec_globals.update({'optuna_trial': optuna_trial, 'data': data, 'external_params': external_params})
     
     try:
         # 1. 컴파일 오버헤드 최소화를 위한 exec 환경 설정
-        exec_globals = globals().copy()
-        exec_globals.update(local_env)
         exec(code_str, exec_globals)
         
         # 사용자가 직접 metrics를 반환한 경우 (새 템플릿 방식)
@@ -22,7 +21,7 @@ def run_backtrader(code_str: str, data: pd.DataFrame, optuna_trial=None, externa
         if not strategy_class:
             return False, "전략 코드에 'TestStrategy' 이름의 클래스가 정의되지 않았습니다."
             
-        cerebro = bt.Cerebro(stdstats=False) # 표준 통계(Broker 등) 시각화 비활성으로 가속
+        cerebro = bt.Cerebro(stdstats=False) # 표준 통계 시각화 비활성으로 가속
         
         # 파라미터 주입 최적화
         if external_params:
@@ -32,24 +31,21 @@ def run_backtrader(code_str: str, data: pd.DataFrame, optuna_trial=None, externa
         
         data_feed = bt.feeds.PandasData(dataname=data)
         cerebro.adddata(data_feed)
-        
         cerebro.broker.setcash(10000.0)
-        cerebro.broker.setcommission(commission=0.001)
+        cerebro.broker.setcommission(commission=0.0008)
         
-        cerebro.addanalyzer(bt.analyzers.DrawDown, _name='drawdown')
+        cerebro.addanalyzer(bt.indicators.DrawDown, _name='drawdown')
         cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name='trades')
         
-        # 엔진 최종 가속 플래그
         results = cerebro.run(runonce=True, preload=True, runstds=False, exactbars=False)
-        if not results:
-            return False, "연산 실패"
+        if not results: return False, "연산 실패"
             
         strat = results[0]
         final_value = cerebro.broker.getvalue()
         dd_anlz = strat.analyzers.drawdown.get_analysis()
         trades_anlz = strat.analyzers.trades.get_analysis()
         
-        tot_return = (final_value - 10000.0) / 100.0 # 10000 기준 (%)
+        tot_return = (final_value - 10000.0) / 100.0
         max_dd = dd_anlz.max.drawdown if 'max' in dd_anlz else 0.0
         total_trades = trades_anlz.total.closed if hasattr(trades_anlz, 'total') and hasattr(trades_anlz.total, 'closed') else 0
         
@@ -70,14 +66,17 @@ def run_backtrader(code_str: str, data: pd.DataFrame, optuna_trial=None, externa
         return False, f"Backtrader 엔진 자체 에러: {str(e)}"
 
 def run_vectorbt(code_str: str, data: pd.DataFrame, optuna_trial=None):
-    """Vectorbt를 이용한 동적 백테스트 실행"""
-    # 전역 접근용으로 data 할당
-    local_env = {'data': data, 'optuna_trial': optuna_trial}
+    """Vectorbt를 이용한 동적 백테스트 실행 (통합 네임스페이스 안정화 버전)"""
+    # 전역과 지역을 통합하여 변수 접근 유실 방지 (optuna_trial 실시간 바인딩 보장)
+    exec_globals = globals().copy()
+    exec_globals.update({'data': data, 'optuna_trial': optuna_trial})
     
     try:
-        exec(code_str, globals(), local_env)
+        # 통합 네임스페이스에서 실행하여 'optuna_trial' 변수 유실 방지
+        exec(code_str, exec_globals)
         
-        metrics = local_env.get('metrics')
+        # 전략 코드 내부에서 생성된 metrics 딕셔너리 추출
+        metrics = exec_globals.get('metrics')
         if not metrics or not isinstance(metrics, dict):
             return False, "스크립트가 올바른 'metrics' 딕셔너리를 생성하지 않았습니다. 템플릿의 끝부분을 확인해주세요."
             

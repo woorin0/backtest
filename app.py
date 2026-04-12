@@ -20,26 +20,23 @@ from core.notifier import send_discord_error
 # 환경 변수 로드
 load_dotenv()
 
-# 고가독성 페이지 설정 (라이트 테마 지향)
+# 고가독성 페이지 설정
 st.set_page_config(
     page_title="퀀트 최적화 터미널",
     page_icon="📈",
     layout="wide",
-    initial_sidebar_state="collapsed" # 모바일을 위해 사이드바 기본 닫힘
+    initial_sidebar_state="collapsed"
 )
 
-# ----------------- [CSS: 고가독성 라이트 테마 & 모바일 최적화] -----------------
+# ----------------- [CSS: 디자인 및 모바일 최적화] -----------------
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Pretendard:wght@400;700;900&display=swap');
-    
     html, body, [class*="css"] {
         font-family: 'Pretendard', sans-serif;
         background-color: #ffffff !important;
         color: #121212 !important;
     }
-    
-    /* 카드 스타일 (밝고 뚜렷한 구분) */
     .metric-card {
         background-color: #f8f9fa;
         border: 2px solid #eeeeee;
@@ -49,8 +46,6 @@ st.markdown("""
         margin-bottom: 10px;
         box-shadow: 0 4px 6px rgba(0,0,0,0.05);
     }
-    
-    /* 제목 스타일 */
     .main-title {
         font-weight: 900;
         letter-spacing: -1.5px;
@@ -59,38 +54,15 @@ st.markdown("""
         font-size: 2.2rem;
         text-align: center;
     }
-    
-    /* 사이드바 스타일 */
-    section[data-testid="stSidebar"] {
-        background-color: #f2f2f7;
-        border-right: 1px solid #e5e5ea;
-    }
-    
-    /* 버튼 스타일 (확인 용이) */
     div.stButton > button {
         border-radius: 10px;
         font-weight: 700;
-        height: 3em;
-        font-size: 1.1em;
-    }
-    
-    /* 에디터 텍스트 가독성 */
-    .stTextArea textarea {
-        font-size: 14px !important;
-        font-family: 'Consolas', monospace !important;
-        background-color: #fafafa !important;
-        color: #1a1a1a !important;
-    }
-
-    /* 모바일 대응: 가로 여백 조정 */
-    .block-container {
-        padding-top: 2rem;
-        padding-bottom: 2rem;
+        height: 3.5em; /* 터치하기 더 편하게 확대 */
     }
 </style>
 """, unsafe_allow_html=True)
 
-# ----------------- [보안: 한국어 로그인 화면] -----------------
+# ----------------- [보안 로그인] -----------------
 access_pwd = os.getenv("APP_PASSWORD", "jumbonuts")
 if "logged_in" not in st.session_state:
     st.session_state["logged_in"] = False
@@ -100,7 +72,7 @@ if not st.session_state["logged_in"]:
     st.markdown("<h1 style='text-align: center;'>🔐 시스템 접속</h1>", unsafe_allow_html=True)
     c1, c2, c3 = st.columns([1, 2, 1])
     with c2:
-        pwd_input = st.text_input("접속 비밀번호를 입력해 주세요 (Password)", type="password")
+        pwd_input = st.text_input("접속 비밀번호를 입력해 주세요", type="password")
         if st.button("시스템 인증 시작", use_container_width=True):
             if pwd_input == access_pwd:
                 st.session_state["logged_in"] = True
@@ -109,38 +81,34 @@ if not st.session_state["logged_in"]:
                 st.error("비밀번호가 올바르지 않습니다.")
     st.stop()
 
-# ----------------- [사이드바: 한국어 설정 제어판] -----------------
+# ----------------- [사이드바 설정] -----------------
 with st.sidebar:
     st.markdown("### 🛠️ 엔진 상세 설정")
-    
-    with st.expander("🌐 자산 및 엔진 선택", expanded=True):
-        exch = st.selectbox("연동 거래소", ["Binance", "Bitget", "Bybit", "OKX", "Upbit"], index=0)
-        sym = st.text_input("심볼 (예: BTC/USDT)", value="BTC/USDT")
-        eng = st.selectbox("구동 엔진", ["Vectorbt", "Backtrader"], index=0)
-    
-    with st.expander("📅 데이터 기간 설정", expanded=True):
-        tf = st.selectbox("봉 주기 (Interval)", ["1h", "2h", "4h", "15m", "5m", "1m"], index=0)
+    with st.expander("🌐 자산 및 엔진", expanded=True):
+        exch = st.selectbox("거래소", ["Binance", "Bitget", "Bybit", "OKX", "Upbit"], index=0)
+        sym = st.text_input("심볼", value="BTC/USDT")
+        eng = st.selectbox("엔진", ["Vectorbt", "Backtrader"], index=0)
+    with st.expander("📅 기간 및 주기", expanded=True):
+        tf = st.selectbox("주기", ["1h", "2h", "4h", "15m", "5m", "1m"], index=0)
         sd = st.date_input("시작일", datetime.date(2022, 1, 1))
         ed = st.date_input("종료일", datetime.date.today())
         lim = st.number_input("최대 봉 갯수", 100, 10000, 1000)
-    
-    with st.expander("⚡ 최적화 전략 제어", expanded=True):
-        # 사용자 요청: 최대 시도수 10,000회 상향
+    with st.expander("⚡ 최적화 설정", expanded=True):
         trials = st.number_input("총 탐색 시도 횟수", 10, 10000, 100, step=100)
-        workers = st.radio("병렬 워커 수", [2, 4, 8], index=1)
+        workers = st.radio("병렬 워커(코어)", [2, 4, 8], index=1)
 
     st.markdown("---")
-    btn_start = st.button("🚀 최적화 엔진 가동", type="primary", use_container_width=True)
-    if st.button("🔄 엔진 초기화 (기본값)", use_container_width=True):
+    btn_start = st.button("🚀 최적화 가동", type="primary", use_container_width=True)
+    if st.button("🔄 엔진 초기화", use_container_width=True):
         st.session_state["trigger_code_refresh"] = True
         st.rerun()
 
-# ----------------- [메인 화면: 수직 통합 레이아웃 (탭 제거)] -----------------
-st.markdown("<h1 class='main-title'>📈 퀀트 백테스트 최적화 터미널</h1>", unsafe_allow_html=True)
+# ----------------- [메인 화면 UI] -----------------
+st.markdown("<h1 class='main-title'>📈 퀀트 백테스트 최적화 Terminal</h1>", unsafe_allow_html=True)
 
-# 섹션 1: 통합 지표 대시보드
-st.markdown("### 📊 실시간 최고 성과 지표")
-c1, c2 = st.columns(2) # 모바일을 위해 2열씩 배치
+# 섹션 1: 실시간 성과 지표
+st.markdown("### 📊 실시간 최고 성과")
+c1, c2 = st.columns(2)
 with c1: p_m1 = st.empty()
 with c2: p_m2 = st.empty()
 c3, c4 = st.columns(2)
@@ -148,63 +116,58 @@ with c3: p_m3 = st.empty()
 with c4: p_m4 = st.empty()
 
 def draw_metric(label, value, color="#121212"):
-    st.markdown(f"""
-    <div class="metric-card">
-        <p style="color: #666; font-size: 0.9em; font-weight: 700; margin: 0;">{label}</p>
-        <h2 style="color: {color}; margin: 5px 0; font-size: 1.8em;">{value}</h2>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown(f"<div class='metric-card'><p style='color: #666; font-size: 0.9em; font-weight: 700; margin: 0;'>{label}</p><h2 style='color: {color}; margin: 5px 0; font-size: 1.8em;'>{value}</h2></div>", unsafe_allow_html=True)
 
-# 초기화 상태 카드
 p_m1.markdown(draw_metric("최고 수익률", "0.00%"), unsafe_allow_html=True)
 p_m2.markdown(draw_metric("추정 승률", "0.00%"), unsafe_allow_html=True)
-p_m3.markdown(draw_metric("최대 낙폭(MDD)", "0.00%"), unsafe_allow_html=True)
-p_m4.markdown(draw_metric("진행률", "0 / 0"), unsafe_allow_html=True)
+p_m3.markdown(draw_metric("최대 낙폭", "0.00%"), unsafe_allow_html=True)
+p_m4.markdown(draw_metric("진행률", f"0 / {trials}"), unsafe_allow_html=True)
 
 st.divider()
 
-# 섹션 2: 진행 현황 모니터링
-st.markdown("### 🛰️ 엔진 구동 현황")
+# 섹션 2: 진행 모니터링
+st.markdown("### 🛰️ 엔진 모니터링")
 gauge_slot = st.empty()
 status_slot = st.empty()
 
-with st.expander("📝 실시간 실행 로그 보기", expanded=False):
-    log_slot = st.empty()
-
 st.divider()
 
-# 섹션 3: 전략 코드 에디터 (수직 배치)
-st.markdown("### 📝 전략 알고리즘 (Python)")
+# 섹션 3: 전략 에디터
+st.markdown("### 📝 전략 알고리즘")
 if "strategy_code" not in st.session_state or st.session_state.get("trigger_code_refresh"):
     from core.templates import VECTORBT_STRATEGY, BACKTRADER_STRATEGY
     st.session_state["strategy_code"] = VECTORBT_STRATEGY if eng == "Vectorbt" else BACKTRADER_STRATEGY
     st.session_state["trigger_code_refresh"] = False
 
-sc = st.text_area("로직 에디터 (여기서 코드를 수정할 수 있습니다)", value=st.session_state["strategy_code"], height=400)
-if sc != st.session_state["strategy_code"]: 
-    st.session_state["strategy_code"] = sc
+sc = st.text_area("코드 편집기", value=st.session_state["strategy_code"], height=350)
+if sc != st.session_state["strategy_code"]: st.session_state["strategy_code"] = sc
 
 st.divider()
 
-# 섹션 4: 리포트 보관소
-st.markdown("### 📜 최종 리포트 보관소")
+# 섹션 4: 리포트 보관소 (슬림화 버전)
+st.markdown("### 📜 최근 리포트 (최신 3개)")
 os.makedirs("results", exist_ok=True)
-res_files = [f for f in glob.glob("results/*.xlsx")]
-if not res_files:
-    st.info("현재 보관된 리포트가 없습니다. 최적화를 실행하면 결과가 여기 표시됩니다.")
-else:
-    res_files.sort(key=os.path.getmtime, reverse=True)
-    for i, fp in enumerate(res_files[:5]):
-        fn = os.path.basename(fp)
-        with st.container():
-            st.markdown(f"<div style='background: #f1f3f5; padding: 12px; border-radius: 8px; margin-bottom: 5px;'>📁 {fn}</div>", unsafe_allow_html=True)
-            with open(fp, "rb") as f:
-                st.download_button(label=f"📥 {fn[:20]}... 다운로드", data=f, file_name=fn, key=f"dl_k_{i}", use_container_width=True)
+res_files = glob.glob("results/*.xlsx")
+res_files.sort(key=os.path.getmtime, reverse=True)
 
-# ----------------- [백그라운드 로직: Celery & Optuna] -----------------
+# 최신 3개만 노출하여 스크롤 압박 해소
+for i, fp in enumerate(res_files[:3]):
+    fn = os.path.basename(fp)
+    with st.container():
+        st.markdown(f"<div style='background: #f1f3f5; padding: 10px; border-radius: 8px; margin-bottom: 5px;'>📁 {fn}</div>", unsafe_allow_html=True)
+        with open(fp, "rb") as f:
+            st.download_button(label=f"📥 다운로드", data=f, file_name=fn, key=f"dl_sys_{i}", use_container_width=True)
+
+if len(res_files) > 3:
+    with st.expander("더 많은 리포트 보기"):
+        for i, fp in enumerate(res_files[3:15]):
+            fn = os.path.basename(fp)
+            with open(fp, "rb") as f:
+                st.download_button(label=f"📄 {fn}", data=f, file_name=fn, key=f"dl_extra_{i}")
+
+# ----------------- [백그라운드 로직] -----------------
 CACHE_FILE = ".active_task.json"
 active_task = None
-
 if os.path.exists(CACHE_FILE):
     try:
         with open(CACHE_FILE, "r") as f: meta = json.load(f)
@@ -217,14 +180,13 @@ if btn_start and not active_task:
     from core.data_fetcher import fetch_candles, get_cache_path
     with st.spinner("📦 시장 데이터를 가져오는 중..."):
         data = fetch_candles(exch, sym, tf, sd, ed, lim)
-    
     if data is not None and not data.empty:
         dp = get_cache_path(exch, sym, tf, sd, ed)
         sn = f"study_{int(time.time())}"
         header = [run_optuna_worker.s(sn, dp, eng, st.session_state["strategy_code"], trials//workers, sym) for i in range(workers)]
         callback = finalize_optuna_study.s(sn, dp, eng, sym)
         res = chord(header)(callback)
-        active_task = {"task_id": res.id, "study_name": sn, "n_trials": trials, "symbol": sym}
+        active_task = {"task_id": res.id, "study_name": sn, "n_trials": trials, "symbol": sym, "start_time": time.time()}
         with open(CACHE_FILE, "w") as f: json.dump(active_task, f)
         st.rerun()
 
@@ -239,19 +201,28 @@ if active_task:
             best = study.best_value if compl > 0 else 0.0
             
             p_val = min(int(compl / active_task["n_trials"] * 100), 100)
-            gauge_slot.progress(p_val, text=f"전체 {active_task['n_trials']}회 중 {compl}회 탐색 완료")
+            gauge_slot.progress(p_val, text=f"{compl} / {active_task['n_trials']} 회 탐색 중")
             
             p_m1.markdown(draw_metric("최고 수익률", f"{best:.2f}%", "#34C759" if best > 0 else "#121212"), unsafe_allow_html=True)
-            p_m4.markdown(draw_metric("진행률", f"{compl} / {active_task['n_trials']}"), unsafe_allow_html=True)
-            status_slot.markdown(f"<p style='text-align: center; color: #666;'>📡 AI가 최적의 파라미터를 찾는 중... 현재 최고 수익률: <b>{best:.2f}%</b></p>", unsafe_allow_html=True)
+            p_m4.markdown(draw_metric("탐색 진행", f"{compl} / {active_task['n_trials']}"), unsafe_allow_html=True)
+            
+            # 🚨 가독성 포인트: 0% 정체 대처 메시지
+            if compl == 0:
+                elapsed = int(time.time() - (active_task.get("start_time") or time.time()))
+                if elapsed > 180: # 3분 지났는데 여백이면 워커 점검 유도
+                    status_slot.warning(f"⚠️ {elapsed}초 경과: 아직 첫 결과가 없습니다. **서버의 Celery Worker가 실행 중인지 확인해 주세요.** (Numba 컴파일 중일 수도 있습니다.)")
+                else:
+                    status_slot.markdown(f"<p style='text-align: center; color: #ff9800;'>⏳ <b>엔진 시동 중:</b> 첫 번째 분석 결과를 기다리고 있습니다. {elapsed}초 경과...</p>", unsafe_allow_html=True)
+            else:
+                status_slot.markdown(f"<p style='text-align: center; color: #007aff;'>📡 최고 {best:.2f}% 수익률 파라미터 탐지 완료... 계속 탐색 중</p>", unsafe_allow_html=True)
         except: pass
-        time.sleep(2)
+        time.sleep(3)
 
     final = tk.get()
     if os.path.exists(CACHE_FILE): os.remove(CACHE_FILE)
     if final.get('status') == 'SUCCESS':
         st.balloons()
-        p_m1.markdown(draw_metric("최종 최고 수익률", f"{final['best_value']:.2f}%", "#34C759"), unsafe_allow_html=True)
-        st.success(f"✅ 최적화가 완료되었습니다. 최종 결과: {final['best_value']:.2f}%")
+        p_m1.markdown(draw_metric("최종 결과", f"{final['best_value']:.2f}%", "#34C759"), unsafe_allow_html=True)
+        st.success(f"✅ 최적화 완료! 최고의 수익률: {final['best_value']:.2f}%")
         with open(final['excel_file'], "rb") as f:
-            st.download_button("📥 최종 최적 성과 리포트 다운로드", f, f"Best_{active_task['symbol']}.xlsx", type="primary", use_container_width=True)
+            st.download_button("🚀 [중요] 최적 성과 리포트(Excel) 받기", f, f"Best_{active_task['symbol']}.xlsx", type="primary", use_container_width=True)
