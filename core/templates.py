@@ -153,9 +153,9 @@ def sim_final_nb(h, l, c, hlp_raw, llp_raw, atp, ats, trm, inst_num, use_tr, o_m
             t_ex = (h[i]>=tpp or l[i]<=slp) if e_act=='limits' else (c[i]>=tpp or c[i]<=slp)
             if t_ex:
                 xp = (tpp if h[i]>=tpp else slp) if e_act=='limits' else c[i]
-                if inst_num == 1: ex[i], pr[i], sz[i], pos = True, xp - slip, -1.0, False
-                elif pf == 0: ex[i], pr[i], sz[i], pf, bfe = True, xp - slip, -0.5, 1, i
-                elif i > bfe: ex[i], pr[i], sz[i], pos = True, xp - slip, -1.0, False
+                if inst_num == 1: ex[i], pr[i], sz[i], pos = True, xp - slip, 1.0, False
+                elif pf == 0: ex[i], pr[i], sz[i], pf, bfe = True, xp - slip, 0.5, 1, i
+                elif i > bfe: ex[i], pr[i], sz[i], pos = True, xp - slip, 1.0, False
     return en, ex, pr, sz
 
 tick_val = slippage_ticks * (10 ** -ex_dec)
@@ -163,11 +163,11 @@ en, ex, pr, sz = sim_final_nb(h_np, l_np, c_np, hl_p_raw, ll_p_raw, atr_tp, atr_
 portfolio = vbt.Portfolio.from_signals(data['Close'], en, ex, price=pr, size=sz, size_type='percent', init_cash=1000000, fees=0.0008, slippage=0)
 stats = portfolio.stats()
 metrics = {
-    "Total Return (%)": round(np.nan_to_num(float(portfolio.total_return * 100.0)), 2),
+    "Total Return (%)": round(np.nan_to_num(float(portfolio.total_return() * 100.0)), 2),
     "Win Rate (%)": round(np.nan_to_num(float(stats.get('Win Rate [%]', 0.0))), 2),
-    "MDD (%)": round(np.nan_to_num(float(portfolio.max_drawdown * 100.0)), 2),
+    "MDD (%)": round(np.nan_to_num(float(portfolio.max_drawdown() * 100.0)), 2),
     "Total Trades": int(portfolio.trades.count()),
-    "Total Profit": round(np.nan_to_num(float(portfolio.total_profit)), 2)
+    "Total Profit": round(np.nan_to_num(float(portfolio.total_profit())), 2)
 }
 \"\"\"
 
@@ -266,9 +266,13 @@ class TestStrategy(bt.Strategy):
         self.bb = BBCustom(period=self.p.bb_length, dev=self.p.bb_dev, min_width=self.p.bb_min_width, matype=self.p.bb_ma_type)
         self.hott = HOTTIndicator(period=self.p.hott_h_length, length=self.p.hott_length, percent=self.p.hott_percent, use_high=self.p.hott_use_high, matype=self.p.hott_ma_type)
         self.tr_ma = UniversalMA(self.dataclose, period=self.p.tr_ma_length, matype=self.p.tr_ma_type)
-        self.entry_id = None; self.is_first_filled = False; self.entry_order = None; self.tp_order = None; self.sl_order = None
+        self.entry_id = None; self.partial_filled = False; self.tp_order = None; self.sl_order = None
         tick_size = 10.0 ** -self.p.exchange_decimal
         self.broker.set_slippage_fixed(3.0 * tick_size)
+
+    def get_qty(self, val):
+        dec = self.p.exchange_decimal
+        return math.floor(val * (10**dec)) / (10.0**dec)
 
     def issue_exit_orders(self, base_price, size):
         exit_mode = self.p.exit_at_hl if self.entry_id == 'HL' else self.p.exit_at_ll
@@ -286,11 +290,11 @@ class TestStrategy(bt.Strategy):
     def notify_order(self, order):
         if order.status == order.Completed:
             if order.isbuy():
-                self.entry_id = order.info.get('id'); qty = order.executed.size / self.p.installment
-                self.issue_exit_orders(order.executed.price, qty)
+                self.entry_id = order.info.get('id'); target_qty = order.executed.size / self.p.installment
+                self.issue_exit_orders(order.executed.price, self.get_qty(target_qty))
             elif order.issell():
-                if self.position.size > 0: self.is_first_filled = True
-                else: self.entry_id, self.is_first_filled = None, False
+                if self.position.size > 0: self.partial_filled = True
+                else: self.entry_id, self.partial_filled = None, False
 
     def next(self):
         if self.position.size > 0:
@@ -304,39 +308,14 @@ class TestStrategy(bt.Strategy):
                     slp = sl_f if self.p.hl_sl_price=='Fixed' else (sl_a if self.p.hl_sl_price=='ATR' else max(sl_f, sl_a))
                 else: tpp, slp = ep*(1+self.p.tp_ll_per), ep*(1-self.p.sl_ll_per)
                 if self.dataclose[0] >= tpp or self.dataclose[0] <= slp:
-                    self.close(); return
-            if self.is_first_filled and not self.tp_order and exit_mode == 'limits': self.issue_exit_orders(self.position.price, self.position.size); self.is_first_filled = False
+                    qty = self.get_qty(self.position.size if self.p.installment == 1 or self.partial_filled else self.position.size / 2)
+                    self.sell(size=qty); return
+            if self.partial_filled and not self.tp_order and exit_mode == 'limits': self.issue_exit_orders(self.position.price, self.position.size); self.partial_filled = False
             if self.p.tr_hl and self.datas[0].close[0] < self.tr_ma[0] and self.datas[0].close[-1] >= self.tr_ma[-1]: self.close(); return
         if not self.position:
-            hott_v = self.hott.hott[0]
-            hlp = self.bb.top[0] if self.p.hl_price=='BB' else (hott_v if self.p.hl_price=='H/L OTT' else max(hott_v, self.bb.top[0]))
+            hott_v = self.hott.hott[0]; hlp = self.bb.top[0] if self.p.hl_price=='BB' else (hott_v if self.p.hl_price=='H/L OTT' else max(hott_v, self.bb.top[0]))
             llp = self.ma2[0]*(1 - self.ma1[0]*self.p.ll_mult - self.p.entry_ll_per) if self.p.ll_volatility_filter else self.ma2[0]*(1-self.p.entry_ll_per)
-            qty = self.broker.getvalue()/self.datas[0].close[0]
-            if self.datahigh[0] > hlp:
-                eid = 'HL'; ep = hlp
-                tp_f, tp_a = ep*(1+self.p.tp_hl_per), ep + self.p.hl_tp_atr_mul*self.atr_tp[0]
-                tpp = tp_f if self.p.hl_tp_price=='Fixed' else (tp_a if self.p.hl_tp_price=='ATR' else max(tp_f, tp_a))
-                sl_f, sl_a = ep*(1-self.p.sl_hl_per), ep - self.p.hl_sl_atr_mul*self.atr_sl[0]
-                slp = sl_f if self.p.hl_sl_price=='Fixed' else (sl_a if self.p.hl_sl_price=='ATR' else max(sl_f, sl_a))
-                if self.datahigh[0] >= tpp or self.datalow[0] <= slp:
-                    self.buy(exectype=bt.Order.Stop, price=hlp, size=qty).info['id'] = 'HL'; self.close(); return
-                else: self.buy(exectype=bt.Order.Stop, price=hlp, size=qty).info['id'] = 'HL'
-            elif self.datalow[0] < llp:
-                eid = 'LL'; ep = llp
-                tpp, slp = ep*(1+self.p.tp_ll_per), ep*(1-self.p.sl_ll_per)
-                if self.datahigh[0] >= tpp or self.datalow[0] <= slp:
-                    self.buy(exectype=bt.Order.Limit, price=llp, size=qty).info['id'] = 'LL'; self.close(); return
-                else: self.buy(exectype=bt.Order.Limit, price=llp, size=qty).info['id'] = 'LL'
-
-cerebro = bt.Cerebro(); cerebro.addstrategy(TestStrategy); cerebro.adddata(bt.feeds.PandasData(dataname=data))
-cerebro.broker.setcash(1000000.0); cerebro.broker.setcommission(commission=0.0008)
-cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name='trades'); cerebro.addanalyzer(bt.analyzers.DrawDown, _name='drawdown')
-init_val = cerebro.broker.getvalue(); results = cerebro.run(); final_val = cerebro.broker.getvalue(); total_prof = final_val - init_val; ret_pct = (total_prof / init_val) * 100
-win_rate, mdd, total_tr = 0.0, 0.0, 0
-if results:
-    strat = results[0]; t_info = strat.analyzers.trades.get_analysis(); d_info = strat.analyzers.drawdown.get_analysis()
-    total_tr = t_info.total.total if 'total' in t_info else 0
-    if total_tr > 0 and 'won' in t_info: win_rate = round((t_info.won.total / total_tr) * 100, 2)
-    if 'max' in d_info and 'drawdown' in d_info.max: mdd = round(d_info.max.drawdown, 2)
-metrics = {"Total Return (%)": round(ret_pct,2), "Total Profit": round(total_prof, 2), "Win Rate (%)": win_rate, "MDD (%)": mdd, "Total Trades": total_tr}
+            qty = self.get_qty(self.broker.getvalue() / self.datas[0].close[0])
+            if self.datahigh[0] > hlp: self.buy(exectype=bt.Order.Stop, price=hlp, size=qty).info['id'] = 'HL'
+            elif self.datalow[0] < llp: self.buy(exectype=bt.Order.Limit, price=llp, size=qty).info['id'] = 'LL'
 \"\"\"

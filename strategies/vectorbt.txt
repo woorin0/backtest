@@ -151,9 +151,9 @@ def sim_final_nb(h, l, c, hlp_raw, llp_raw, atp, ats, trm, inst_num, use_tr, o_m
             t_ex = (h[i]>=tpp or l[i]<=slp) if e_act=='limits' else (c[i]>=tpp or c[i]<=slp)
             if t_ex:
                 xp = (tpp if h[i]>=tpp else slp) if e_act=='limits' else c[i]
-                if inst_num == 1: ex[i], pr[i], sz[i], pos = True, xp - slip, -1.0, False
-                elif pf == 0: ex[i], pr[i], sz[i], pf, bfe = True, xp - slip, -0.5, 1, i
-                elif i > bfe: ex[i], pr[i], sz[i], pos = True, xp - slip, -1.0, False
+                if inst_num == 1: ex[i], pr[i], sz[i], pos = True, xp - slip, 1.0, False
+                elif pf == 0: ex[i], pr[i], sz[i], pf, bfe = True, xp - slip, 0.5, 1, i
+                elif i > bfe: ex[i], pr[i], sz[i], pos = True, xp - slip, 1.0, False
     return en, ex, pr, sz
 
 tick_val = slippage_ticks * (10 ** -ex_dec)
@@ -161,9 +161,9 @@ en, ex, pr, sz = sim_final_nb(h_np, l_np, c_np, hl_p_raw, ll_p_raw, atr_tp, atr_
 portfolio = vbt.Portfolio.from_signals(data['Close'], en, ex, price=pr, size=sz, size_type='percent', init_cash=1000000, fees=0.0008, slippage=0)
 stats = portfolio.stats()
 metrics = {
-    "Total Return (%)": round(np.nan_to_num(float(portfolio.total_return * 100.0)), 2),
+    "Total Return (%)": round(np.nan_to_num(float(portfolio.total_return() * 100.0)), 2),
     "Win Rate (%)": round(np.nan_to_num(float(stats.get('Win Rate [%]', 0.0))), 2),
-    "MDD (%)": round(np.nan_to_num(float(portfolio.max_drawdown * 100.0)), 2),
+    "MDD (%)": round(np.nan_to_num(float(portfolio.max_drawdown() * 100.0)), 2),
     "Total Trades": int(portfolio.trades.count()),
-    "Total Profit": round(np.nan_to_num(float(portfolio.total_profit)), 2)
+    "Total Profit": round(np.nan_to_num(float(portfolio.total_profit())), 2)
 }

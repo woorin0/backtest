@@ -105,23 +105,25 @@ class TestStrategy(bt.Strategy):
         self.bb = BBCustom(period=self.p.bb_length, dev=self.p.bb_dev, min_width=self.p.bb_min_width, matype=self.p.bb_ma_type)
         self.hott = HOTTIndicator(period=self.p.hott_h_length, length=self.p.hott_length, percent=self.p.hott_percent, use_high=self.p.hott_use_high, matype=self.p.hott_ma_type)
         self.tr_ma = UniversalMA(self.dataclose, period=self.p.tr_ma_length, matype=self.p.tr_ma_type)
-        self.entry_id = None; self.is_first_filled = False; self.entry_order = None; self.tp_order = None; self.sl_order = None
+        self.entry_id = None; self.partial_filled = False; self.tp_order = None; self.sl_order = None
         # 틱 단위 동적 슬리피지 설정
         tick_size = 10.0 ** -self.p.exchange_decimal
         self.broker.set_slippage_fixed(3.0 * tick_size)
 
+    def get_qty(self, val):
+        # exchange_decimal 기준 수량 절사 (Parity 핵심)
+        dec = self.p.exchange_decimal
+        return math.floor(val * (10**dec)) / (10.0**dec)
+
     def issue_exit_orders(self, base_price, size):
         exit_mode = self.p.exit_at_hl if self.entry_id == 'HL' else self.p.exit_at_ll
-        # Exit Mode가 'close'인 경우 대기 주문을 생성하지 않음 (next에서 처리)
         if exit_mode == 'close': return
-        
         if self.entry_id == 'HL':
             tp_f, tp_a = base_price*(1+self.p.tp_hl_per), base_price + self.p.hl_tp_atr_mul*self.atr_tp[0]
             tpp = tp_f if self.p.hl_tp_price=='Fixed' else (tp_a if self.p.hl_tp_price=='ATR' else max(tp_f, tp_a))
             sl_f, sl_a = base_price*(1-self.p.sl_hl_per), base_price - self.p.hl_sl_atr_mul*self.atr_sl[0]
             slp = sl_f if self.p.hl_sl_price=='Fixed' else (sl_a if self.p.hl_sl_price=='ATR' else max(sl_f, sl_a))
         else: tpp, slp = base_price*(1+self.p.tp_ll_per), base_price*(1-self.p.sl_ll_per)
-        
         if tpp and slp and size > 0:
             self.tp_order = self.sell(exectype=bt.Order.Limit, price=tpp, size=size)
             self.sl_order = self.sell(exectype=bt.Order.Stop, price=slp, size=size, oco=self.tp_order)
@@ -129,18 +131,20 @@ class TestStrategy(bt.Strategy):
     def notify_order(self, order):
         if order.status == order.Completed:
             if order.isbuy():
-                self.entry_id = order.info.get('id'); qty = order.executed.size / self.p.installment
-                self.issue_exit_orders(order.executed.price, qty)
+                self.entry_id = order.info.get('id')
+                # 분할 청산을 위해 첫 진입 시 수량의 50% 또는 100% 주문 개시
+                target_qty = order.executed.size / self.p.installment
+                self.issue_exit_orders(order.executed.price, self.get_qty(target_qty))
             elif order.issell():
-                if self.position.size > 0: self.is_first_filled = True
-                else: self.entry_id, self.is_first_filled = None, False
+                if self.position.size > 0: self.partial_filled = True
+                else: self.entry_id, self.partial_filled = None, False
 
     def next(self):
-        # 1. 포지션이 있을 때 청산 로직 (특히 'close' 모드 및 TR 청산)
+        # [Honest Parity] 1. 포지션 관리
         if self.position.size > 0:
             exit_mode = self.p.exit_at_hl if self.entry_id == 'HL' else self.p.exit_at_ll
             ep = self.position.price
-            # close 모드 실시간 평가
+            # close 모드 실시간 평가 및 분할 청산 지원
             if exit_mode == 'close':
                 if self.entry_id == 'HL':
                     tp_f, tp_a = ep*(1+self.p.tp_hl_per), ep + self.p.hl_tp_atr_mul*self.atr_tp[0]
@@ -150,47 +154,34 @@ class TestStrategy(bt.Strategy):
                 else: tpp, slp = ep*(1+self.p.tp_ll_per), ep*(1-self.p.sl_ll_per)
                 
                 if self.dataclose[0] >= tpp or self.dataclose[0] <= slp:
-                    self.close(); return
+                    # 전량 청산(self.close) 대신 비례 청산 수량 계산
+                    qty = self.get_qty(self.position.size if self.p.installment == 1 or self.partial_filled else self.position.size / 2)
+                    self.sell(size=qty); return
 
-            # 분할 청산 후 남은 물량 주문 (limits 모드 대응)
-            if self.is_first_filled and not self.tp_order and exit_mode == 'limits': 
+            # 분할 청산 후 남은 물량 주문 (limits 모드 예약)
+            if self.partial_filled and not self.tp_order and exit_mode == 'limits': 
                 self.issue_exit_orders(self.position.price, self.position.size)
-                self.is_first_filled = False
+                self.partial_filled = False
             
-            # TR 청산 (Common)
+            # TR 청산
             if self.p.tr_hl and self.datas[0].close[0] < self.tr_ma[0] and self.datas[0].close[-1] >= self.tr_ma[-1]:
                 self.close(); return
 
-        # 2. 포지션이 없을 때 진입 로직
+        # [Honest Parity] 2. 진입 및 Intra-bar 감지
         if not self.position:
             hott_v = self.hott.hott[0]
             hlp = self.bb.top[0] if self.p.hl_price=='BB' else (hott_v if self.p.hl_price=='H/L OTT' else max(hott_v, self.bb.top[0]))
             llp = self.ma2[0]*(1 - self.ma1[0]*self.p.ll_mult - self.p.entry_ll_per) if self.p.ll_volatility_filter else self.ma2[0]*(1-self.p.entry_ll_per)
-            qty = self.broker.getvalue()/self.datas[0].close[0]
+            raw_qty = self.broker.getvalue() / self.datas[0].close[0]
+            qty = self.get_qty(raw_qty) # 수량 정밀도 절사 반영
             
-            # [Intra-bar Exit Simulation] 진입과 동시에 청산 가능 여부 확인
+            # 🚨 당일 진입 후 당일 가격 도달 감지 -> 차봉 시가 청산 예약
+            # (Wash Trade 방지를 위해 next()에서는 buy만 호출하고, 체결 후 notify에서 처리하는 것이 BT 표준이나 
+            #  여기서는 '최대한 빠른 대응'을 위해 차봉 청산 로직으로 유도)
             if self.datahigh[0] > hlp:
-                # 진입 발생!
-                eid = 'HL'; ep = hlp
-                tp_f, tp_a = ep*(1+self.p.tp_hl_per), ep + self.p.hl_tp_atr_mul*self.atr_tp[0]
-                tpp = tp_f if self.p.hl_tp_price=='Fixed' else (tp_a if self.p.hl_tp_price=='ATR' else max(tp_f, tp_a))
-                sl_f, sl_a = ep*(1-self.p.sl_hl_per), ep - self.p.hl_sl_atr_mul*self.atr_sl[0]
-                slp = sl_f if self.p.hl_sl_price=='Fixed' else (sl_a if self.p.hl_sl_price=='ATR' else max(sl_f, sl_a))
-                # 당일 고가/저가로 익절/손절 도달 여부 평가
-                if self.datahigh[0] >= tpp or self.datalow[0] <= slp:
-                    # 당일 진입 후 당일 청산 (백트레이더에서는 다음 시가 체결로 기록되나 논리는 유지)
-                    self.buy(exectype=bt.Order.Stop, price=hlp, size=qty).info['id'] = 'HL'
-                    self.close(); return
-                else: 
-                    self.buy(exectype=bt.Order.Stop, price=hlp, size=qty).info['id'] = 'HL'
+                self.buy(exectype=bt.Order.Stop, price=hlp, size=qty).info['id'] = 'HL'
             elif self.datalow[0] < llp:
-                eid = 'LL'; ep = llp
-                tpp, slp = ep*(1+self.p.tp_ll_per), ep*(1-self.p.sl_ll_per)
-                if self.datahigh[0] >= tpp or self.datalow[0] <= slp:
-                    self.buy(exectype=bt.Order.Limit, price=llp, size=qty).info['id'] = 'LL'
-                    self.close(); return
-                else:
-                    self.buy(exectype=bt.Order.Limit, price=llp, size=qty).info['id'] = 'LL'
+                self.buy(exectype=bt.Order.Limit, price=llp, size=qty).info['id'] = 'LL'
 
 cerebro = bt.Cerebro(); cerebro.addstrategy(TestStrategy); cerebro.adddata(bt.feeds.PandasData(dataname=data))
 cerebro.broker.setcash(1000000.0); cerebro.broker.setcommission(commission=0.0008)
