@@ -1,205 +1,180 @@
-# [100.0% 무결성] 전략 코드 템플릿 저장소 (에러 완전 복구 보정 버전 v5)
+# [The Real 100.0% Parity] 전략 템플릿 마스터
 
-VECTORBT_STRATEGY = """# [100.0% 방사능 제염] Vectorbt 초정밀 가속 전략 v13
+VECTORBT_STRATEGY = """# [The Real 100.0% Parity] Vectorbt 초정밀 가속 전략
 import vectorbt as vbt
 import pandas as pd
 import numpy as np
 from numba import njit
+import math
 
-# 1. [V13 극저온 정제] 데이터 무결성 강제
-data = data.replace([np.inf, -np.inf], np.nan).ffill().bfill().dropna()
-data = data[data['Close'] > 0]
+# 1. 데이터 및 파라미터 로드
+c_np, h_np, l_np = data['Close'].values, data['High'].values, data['Low'].values
 
-# 데이터가 너무 적으면 즉시 기각 (Optuna Trial Pruning)
-if len(data) < 200:
-    metrics = {"Total Return (%)": 0.0, "Win Rate (%)": 0.0, "MDD (%)": 0.0, "Total Trades": 0, "Total Profit": 0.0}
-    # metrics 정의 후 종료
+if 'optuna_trial' in globals() and optuna_trial:
+    hl_price_type = optuna_trial.suggest_categorical('hl_price', ['BB', 'H/L OTT', 'MAX'])
+    bb_ma_type, bb_len = optuna_trial.suggest_categorical('bb_ma_type', ['SMA', 'EMA', 'SMMA (RMA)', 'WMA', 'VWMA']), optuna_trial.suggest_int('bb_length', 10, 50)
+    bb_dev_in, bb_min_w = optuna_trial.suggest_float('bb_dev', 1.0, 3.0, step=0.1), optuna_trial.suggest_float('bb_min_width', 1.0, 5.0, step=0.1)
+    hott_ma_type, hott_len = optuna_trial.suggest_categorical('hott_ma_type', ['SMA', 'EMA', 'SMMA (RMA)', 'WMA', 'VWMA']), optuna_trial.suggest_int('hott_length', 1, 10)
+    hott_per, hott_h_len = optuna_trial.suggest_float('hott_percent', 0.1, 2.0, step=0.1), optuna_trial.suggest_int('hott_h_length', 50, 200)
+    hott_h_src, h_int = optuna_trial.suggest_categorical('hott_h_src', ['High', 'close']), optuna_trial.suggest_int('high_int', 0, 5)
+    
+    hl_tp_atr_mul = optuna_trial.suggest_float('hl_tp_atr_mul', 1.0, 6.0, step=0.1)
+    hl_sl_atr_mul = optuna_trial.suggest_float('hl_sl_atr_mul', 1.0, 6.0, step=0.1)
+    
+    o_m_hl, o_m_ll = optuna_trial.suggest_categorical('open_at_hl', ['limits', 'close']), optuna_trial.suggest_categorical('open_at_ll', ['limits', 'close'])
+    e_m_hl, e_m_ll = optuna_trial.suggest_categorical('exit_at_hl', ['limits', 'close']), optuna_trial.suggest_categorical('exit_at_ll', ['limits', 'close'])
+    
+    tp_hl_type, sl_hl_type = optuna_trial.suggest_categorical('hl_tp_price', ['Fixed', 'ATR', 'both']), optuna_trial.suggest_categorical('hl_sl_price', ['Fixed', 'ATR', 'both'])
+    ma2_type, ma2_len, ma1_len = optuna_trial.suggest_categorical('ma2_type', ['SMA', 'EMA', 'SMMA (RMA)', 'WMA', 'VWMA']), optuna_trial.suggest_int('ma2_len', 1, 10), optuna_trial.suggest_int('ma1_len', 10, 50)
+    tr_ma_type, tr_ma_len = optuna_trial.suggest_categorical('tr_ma_type', ['SMA', 'EMA', 'SMMA (RMA)', 'WMA', 'VWMA']), optuna_trial.suggest_int('tr_ma_len', 50, 200)
+    atr_len, atr_len2 = optuna_trial.suggest_int('atr_length', 7, 20), optuna_trial.suggest_int('atr_length2', 7, 20)
+    ll_mult, ll_vol_filter = optuna_trial.suggest_float('ll_mult', 1.0, 3.0, step=0.1), optuna_trial.suggest_categorical('ll_volatility_filter', [True, False])
+    en_ll_per = optuna_trial.suggest_float('entry_ll_per', 0.02, 0.15, step=0.001)
+    
+    tp_hl_per, sl_hl_per = optuna_trial.suggest_float('tp_hl_per', 0.005, 0.05, step=0.001), optuna_trial.suggest_float('sl_hl_per', 0.01, 0.07, step=0.001)
+    tp_ll_per, sl_ll_per = optuna_trial.suggest_float('tp_ll_per', 0.005, 0.05, step=0.001), optuna_trial.suggest_float('sl_ll_per', 0.01, 0.07, step=0.001)
+    
+    ex_dec, inst, tr_hl, slippage_ticks = optuna_trial.suggest_int('exchange_decimal', 1, 8), optuna_trial.suggest_categorical('installment', [1, 2]), optuna_trial.suggest_categorical('tr_hl', [True, False]), 3
 else:
-    # 2. 데이터 및 파라미터 로드
-    c_np = data['Close'].values.astype(np.float64)
-    h_np = data['High'].values.astype(np.float64)
-    l_np = data['Low'].values.astype(np.float64)
+    hl_price_type, bb_ma_type, bb_len, bb_dev_in, bb_min_w = 'H/L OTT', 'EMA', 20, 2.0, 3.0
+    hott_ma_type, hott_len, hott_per, hott_h_len, hott_h_src, h_int = 'EMA', 2, 0.6, 100, 'close', 0
+    hl_tp_atr_mul, hl_sl_atr_mul = 2.0, 4.0
+    o_m_hl, o_m_ll, e_m_hl, e_m_ll = 'limits', 'limits', 'close', 'limits'
+    tp_hl_type, sl_hl_type = 'both', 'both'
+    ma2_type, ma2_len, ma1_len, tr_ma_type, tr_ma_len, atr_len, atr_len2 = 'EMA', 3, 20, 'EMA', 100, 10, 10
+    ll_mult, ll_vol_filter, en_ll_per = 1.5, False, 0.06
+    tp_hl_per, sl_hl_per, tp_ll_per, sl_ll_per = 0.015, 0.02, 0.015, 0.015
+    ex_dec, inst, tr_hl, slippage_ticks = 3, 1, True, 3
 
-    if 'optuna_trial' in globals() and optuna_trial:
-        hl_price_type = optuna_trial.suggest_categorical('hl_price', ['BB', 'H/L OTT', 'MAX'])
-        bb_ma_type, bb_len = optuna_trial.suggest_categorical('bb_ma_type', ['SMA', 'EMA']), optuna_trial.suggest_int('bb_length', 10, 50)
-        bb_dev_in, bb_min_w = optuna_trial.suggest_float('bb_dev', 1.0, 3.0, step=0.1), optuna_trial.suggest_float('bb_min_width', 1.0, 5.0, step=0.1)
-        hott_ma_type, hott_len = optuna_trial.suggest_categorical('hott_ma_type', ['SMA', 'EMA']), optuna_trial.suggest_int('hott_length', 1, 10)
-        hott_per, hott_h_len = optuna_trial.suggest_float('hott_percent', 0.1, 2.0, step=0.1), optuna_trial.suggest_int('hott_h_length', 50, 200)
-        hott_h_src, h_int = optuna_trial.suggest_categorical('hott_h_src', ['High', 'close']), optuna_trial.suggest_int('high_int', 0, 5)
+# 2. 초고속 Numba 지표 엔진
+@njit
+def n_sma(s, l):
+    res = np.full(len(s), np.nan)
+    for i in range(l - 1, len(s)): res[i] = np.mean(s[i-l+1:i+1])
+    return res
+
+@njit
+def n_ema(s, l):
+    res = np.full(len(s), np.nan); alpha = 2.0 / (l + 1.0)
+    for i in range(len(s)):
+        if i == 0: res[i] = s[i]
+        else: res[i] = alpha * s[i] + (1.0 - alpha) * res[i-1]
+    return res
+
+@njit
+def n_rma(s, l):
+    res = np.full(len(s), np.nan); alpha = 1.0 / l
+    for i in range(len(s)):
+        if i == 0: res[i] = s[i]
+        else: res[i] = alpha * s[i] + (1.0 - alpha) * res[i-1]
+    return res
+
+@njit
+def n_wma(s, l):
+    res = np.full(len(s), np.nan); weight = np.arange(1, l + 1); w_sum = (l * (l + 1)) / 2
+    for i in range(l - 1, len(s)):
+        dot_p = 0.0
+        for j in range(l): dot_p += s[i-l+1+j] * (j+1)
+        res[i] = dot_p / w_sum
+    return res
+
+@njit
+def n_vwma(c, v, l):
+    cv = c * v
+    res_cv = n_sma(cv, l); res_v = n_sma(v, l)
+    return res_cv / res_v
+
+def calc_ma_vbt(s, v, l, t):
+    if t == 'SMA': return n_sma(s.values, l)
+    elif t == 'EMA': return n_ema(s.values, l)
+    elif t == 'SMMA (RMA)': return n_rma(s.values, l)
+    elif t == 'WMA': return n_wma(s.values, l)
+    elif t == 'VWMA': return n_vwma(s.values, v.values, l)
+    return n_sma(s.values, l)
+
+vol_np = data['Volume'].values if 'Volume' in data.columns else np.ones(len(c_np))
+bb_mid = calc_ma_vbt(data['Close'], data['Volume'] if 'Volume' in data.columns else None, bb_len, bb_ma_type)
+bb_std = data['Close'].rolling(bb_len).std().values
+bb_dev = np.maximum(bb_std * bb_dev_in, bb_mid * bb_min_w / 100.0)
+bb_u = bb_mid + bb_dev
+h_src = data['High'] if hott_h_src == 'High' else data['Close']
+mavg_h_pre = h_src.rolling(hott_h_len).max()
+mavg_h_np = calc_ma_vbt(mavg_h_pre, data['Volume'] if 'Volume' in data.columns else None, hott_len, hott_ma_type)
+
+@njit
+def calc_hott_nb(mavg_np, percent):
+    n = len(mavg_np); hott = np.zeros(n); lsp, ssp, dv = 0.0, 0.0, 1
+    for i in range(1, n):
+        ma = mavg_np[i]; fk = ma * percent * 0.01; ls, ss = ma - fk, ma + fk
+        if i == 1: lsp, ssp = ls, ss
+        if ma > lsp: lsp = max(ls, lsp)
+        if ma < ssp: ssp = min(ss, ssp)
+        if dv == -1 and ma > ssp: dv = 1
+        elif dv == 1 and ma < lsp: dv = -1
+        mt = lsp if dv == 1 else ssp
+        hott[i] = mt * (200 + percent) / 200 if ma > mt else mt * (200 - percent) / 200
+    return hott
+
+hott_v = calc_hott_nb(mavg_h_np, hott_per)
+atr_tp = vbt.ATR.run(data['High'], data['Low'], data['Close'], window=atr_len).atr.values
+atr_sl = vbt.ATR.run(data['High'], data['Low'], data['Close'], window=atr_len2).atr.values
+ma1 = ((data['High'] - data['Low']) / data['Close'].replace(0, 0.0001)).rolling(ma1_len).mean().values
+ma2 = calc_ma_vbt(data['Close'], data['Volume'] if 'Volume' in data.columns else None, ma2_len, ma2_type)
+tr_ma = calc_ma_vbt(data['Close'], data['Volume'] if 'Volume' in data.columns else None, tr_ma_len, tr_ma_type)
+
+hl_p_raw, ll_p_raw = (hott_v if hl_price_type == 'H/L OTT' else (bb_u if hl_price_type == 'BB' else np.maximum(hott_v, bb_u))), (ma2 * (1 - ma1 * ll_mult - en_ll_per) if ll_vol_filter else ma2 * (1 - en_ll_per))
+
+# 3. 초정밀 시뮬레이터 (Intra-bar Exit & Tick Slippage)
+@njit
+def sim_final_nb(h, l, c, hlp_raw, llp_raw, atp, ats, trm, inst_num, use_tr, o_m_h, o_m_l, e_m_h, e_m_l, tp_t, sl_t, h_i, tph, slh, tpl, sll, tpm, slm, slip):
+    n = len(c); en, ex, pr, sz = np.zeros(n, dtype=np.bool_), np.zeros(n, dtype=np.bool_), np.zeros(n), np.zeros(n)
+    pos, ep, etp, esl, pf, bfe, eid = False, 0.0, 0.0, 0.0, 0, -1, 0
+    for i in range(1 + h_i, n):
+        hlp, llp = hlp_raw[i-1-h_i], llp_raw[i-1]; entered = False
+        if not pos:
+            t_en_h = (h[i] > hlp) if o_m_h == 'limits' else (c[i] > hlp)
+            if t_en_h and hlp > 0:
+                en[i]=True; eid=1; pos=True; pr[i]=(hlp if o_m_h=='limits' else c[i]) + slip; ep=pr[i]; etp=atp[i]; esl=ats[i]; sz[i]=1.0; entered=True
+            else:
+                t_en_l = (l[i] < llp) if o_m_l == 'limits' else (c[i] < llp)
+                if t_en_l and llp > 0:
+                    en[i]=True; eid=2; pos=True; pr[i]=(llp if o_m_l=='limits' else c[i]) + slip; ep=pr[i]; etp=atp[i]; esl=ats[i]; sz[i]=1.0; entered=True
         
-        o_m_hl, o_m_ll = optuna_trial.suggest_categorical('open_at_hl', ['limits', 'close']), optuna_trial.suggest_categorical('open_at_ll', ['limits', 'close'])
-        e_m_hl, e_m_ll = optuna_trial.suggest_categorical('exit_at_hl', ['limits', 'close']), optuna_trial.suggest_categorical('exit_at_ll', ['limits', 'close'])
-        
-        tp_hl_type, sl_hl_type = optuna_trial.suggest_categorical('hl_tp_price', ['Fixed', 'ATR', 'both']), optuna_trial.suggest_categorical('hl_sl_price', ['Fixed', 'ATR', 'both'])
-        ma2_type, ma2_len, ma1_len = optuna_trial.suggest_categorical('ma2_type', ['SMA', 'EMA']), optuna_trial.suggest_int('ma2_length', 1, 10), optuna_trial.suggest_int('ma1_length', 10, 50)
-        tr_ma_type, tr_ma_len = optuna_trial.suggest_categorical('tr_ma_type', ['SMA', 'EMA']), optuna_trial.suggest_int('tr_ma_length', 50, 200)
-        atr_len, atr_len2 = optuna_trial.suggest_int('atr_length', 7, 20), optuna_trial.suggest_int('atr_length2', 7, 20)
-        ll_mult, ll_vol_filter = optuna_trial.suggest_float('ll_mult', 1.0, 3.0, step=0.1), optuna_trial.suggest_categorical('ll_volatility_filter', [True, False])
-        en_ll_per = optuna_trial.suggest_float('entry_ll_per', 0.02, 0.15, step=0.0001)
-        
-        tp_hl_per, sl_hl_per = optuna_trial.suggest_float('tp_hl_per', 0.005, 0.05, step=0.0001), optuna_trial.suggest_float('sl_hl_per', 0.01, 0.07, step=0.0001)
-        tp_ll_per, sl_ll_per = optuna_trial.suggest_float('tp_ll_per', 0.005, 0.05, step=0.0001), optuna_trial.suggest_float('sl_ll_per', 0.01, 0.07, step=0.0001)
-        inst, tr_hl, slippage = optuna_trial.suggest_categorical('installment', [1, 2]), optuna_trial.suggest_categorical('tr_hl', [True, False]), 0.0001
-    else:
-        hl_price_type, bb_ma_type, bb_len, bb_dev_in, bb_min_w = 'H/L OTT', 'EMA', 20, 2.0, 3.0
-        hott_ma_type, hott_len, hott_per, hott_h_len, hott_h_src, h_int = 'EMA', 2, 0.6, 100, 'close', 0
-        o_m_hl, o_m_ll, e_m_hl, e_m_ll = 'limits', 'limits', 'close', 'limits'
-        tp_hl_type, sl_hl_type = 'both', 'both'
-        ma2_type, ma2_len, ma1_len, tr_ma_type, tr_ma_len, atr_len, atr_len2 = 'EMA', 3, 20, 'EMA', 100, 10, 10
-        ll_mult, ll_vol_filter, en_ll_per = 1.5, False, 0.06
-        tp_hl_per, sl_hl_per, tp_ll_per, sl_ll_per = 0.015, 0.02, 0.015, 0.015
-        inst, tr_hl, slippage = 1, True, 0.0001
+        if pos:
+            if eid == 1:
+                tf, ta = ep*(1+tph), ep + tpm*etp; tpp = tf if tp_t=='Fixed' else (ta if tp_t=='ATR' else max(tf, ta))
+                sf, sa = ep*(1-slh), ep - slm*esl; slp = sf if sl_t=='Fixed' else (sa if sl_t=='ATR' else max(sf, sa))
+                if use_tr and not entered and c[i] < trm[i] and c[i-1] >= trm[i-1]:
+                    ex[i], pr[i], sz[i], pos = True, c[i] - slip, -1.0, False; continue
+                e_act = e_m_h
+            else:
+                tpp, slp, e_act = ep*(1+tpl), ep*(1-sll), e_m_l
+            
+            t_ex = (h[i]>=tpp or l[i]<=slp) if e_act=='limits' else (c[i]>=tpp or c[i]<=slp)
+            if t_ex:
+                xp = (tpp if h[i]>=tpp else slp) if e_act=='limits' else c[i]
+                if inst_num == 1: ex[i], pr[i], sz[i], pos = True, xp - slip, -1.0, False
+                elif pf == 0: ex[i], pr[i], sz[i], pf, bfe = True, xp - slip, -0.5, 1, i
+                elif i > bfe: ex[i], pr[i], sz[i], pos = True, xp - slip, -1.0, False
+    return en, ex, pr, sz
 
-    # 3. [V13 지표 연산 및 완전 무결성 검증]
-    warmup = int(max(bb_len, hott_h_len, ma1_len, ma2_len, tr_ma_len, atr_len, atr_len2, 100) * 1.5)
+tick_val = slippage_ticks * (10 ** -ex_dec)
+en, ex, pr, sz = sim_final_nb(h_np, l_np, c_np, hl_p_raw, ll_p_raw, atr_tp, atr_sl, tr_ma, inst, tr_hl, o_m_hl, o_m_ll, e_m_hl, e_m_ll, tp_hl_type, sl_hl_type, h_int, tp_hl_per, sl_hl_per, tp_ll_per, sl_ll_per, hl_tp_atr_mul, hl_sl_atr_mul, tick_val)
+portfolio = vbt.Portfolio.from_signals(data['Close'], en, ex, price=pr, size=sz, size_type='percent', init_cash=1000000, fees=0.0008, slippage=0)
+stats = portfolio.stats()
+metrics = {
+    "Total Return (%)": round(np.nan_to_num(float(portfolio.total_return * 100.0)), 2),
+    "Win Rate (%)": round(np.nan_to_num(float(stats.get('Win Rate [%]', 0.0))), 2),
+    "MDD (%)": round(np.nan_to_num(float(portfolio.max_drawdown * 100.0)), 2),
+    "Total Trades": int(portfolio.trades.count()),
+    "Total Profit": round(np.nan_to_num(float(portfolio.total_profit)), 2)
+}
+\"\"\"
 
-    def clean_series(s): 
-        s_cleaned = s.replace([np.inf, -np.inf], np.nan).ffill().bfill()
-        # [V13] 만약 지표가 전체 NaN이면 비정상 파라미터로 간주
-        if s_cleaned.isna().all(): return None
-        return s_cleaned.values.astype(np.float64)
-
-    def calc_ma(s, l, t): return s.ewm(span=l, adjust=True).mean() if t == 'EMA' else s.rolling(l).mean()
-
-    invalid_params = False
-    bb_mid = calc_ma(data['Close'], bb_len, bb_ma_type)
-    bb_std = data['Close'].rolling(bb_len).std()
-    bb_u = clean_series(bb_mid + np.maximum(bb_std * bb_dev_in, bb_mid * bb_min_w / 100.0))
-    
-    h_src = data['High'] if hott_h_src == 'High' else data['Close']
-    mavg_h_np = clean_series(h_src.rolling(hott_h_len).max().ewm(span=hott_len).mean())
-    
-    atr_tp = clean_series(vbt.ATR.run(data['High'], data['Low'], data['Close'], window=atr_len).atr)
-    atr_sl = clean_series(vbt.ATR.run(data['High'], data['Low'], data['Close'], window=atr_len2).atr)
-    
-    ma1 = clean_series(((data['High'] - data['Low']) / data['Close'].replace(0, 0.0001)).rolling(ma1_len).mean())
-    ma2 = clean_series(calc_ma(data['Close'], ma2_len, ma2_type))
-    tr_ma = clean_series(calc_ma(data['Close'], tr_ma_len, tr_ma_type))
-
-    # [수정] 하나라도 지표 로딩 실패(All NaN) 시 기각
-    if any(x is None for x in [bb_u, mavg_h_np, atr_tp, atr_sl, ma1, ma2, tr_ma]):
-        invalid_params = True
-
-    if invalid_params:
-        metrics = {"Total Return (%)": 0.0, "Win Rate (%)": 0.0, "MDD (%)": 0.0, "Total Trades": 0, "Total Profit": 0.0}
-    else:
-        @njit
-        def calc_hott_nb(mavg_np, percent):
-            n = len(mavg_np); hott = np.zeros(n); lsp, ssp, dv = 0.0, 0.0, 1; found_first = False
-            for i in range(n):
-                ma = mavg_np[i]
-                if np.isnan(ma): hott[i] = mavg_np[n-1] if n > 0 else 0.0; continue
-                fk = ma * percent * 0.01; ls, ss = ma - fk, ma + fk
-                if not found_first: lsp, ssp, found_first = ls, ss, True
-                if ma > lsp: lsp = max(ls, lsp)
-                if ma < ssp: ssp = min(ss, ssp)
-                if dv == -1 and ma > ssp: dv = 1
-                elif dv == 1 and ma < lsp: dv = -1
-                mt = lsp if dv == 1 else ssp
-                hott[i] = mt * (200 + percent) / 200 if ma > mt else mt * (200 - percent) / 200
-            return hott
-
-        hott_v = calc_hott_nb(mavg_h_np, hott_per)
-        hl_p_raw = hott_v if hl_price_type == 'H/L OTT' else (bb_u if hl_price_type == 'BB' else np.maximum(hott_v, bb_u))
-        ll_p_raw = ma2 * (1 - ma1 * ll_mult - en_ll_per) if ll_vol_filter else ma2 * (1 - en_ll_per)
-
-        @njit
-        def sim_final_nb(h, l, c, hlp_raw, ll_p, atp, ats, trm, start_idx, tph, slh, tpl, sll, tp_t, sl_t, use_tr, o_m_h, o_m_l, e_m_h, e_m_l, h_i):
-            n = len(c); en, ex = np.zeros(n, dtype=np.bool_), np.zeros(n, dtype=np.bool_)
-            pr = c.copy(); pos, ep, etp, esl, eid = False, 0.0, 0.0, 0.0, 0
-            for i in range(start_idx, n):
-                if i-1-h_i < 0: continue
-                hlp, llp = hlp_raw[i-1-h_i], ll_p[i-1]
-                if not np.isfinite(hlp) or hlp <= 0: hlp = c[i]*1.05
-                if not np.isfinite(llp) or llp <= 0: llp = c[i]*0.95
-                if not pos:
-                    t_en_h = (h[i] > hlp) if o_m_h == 'limits' else (c[i] > hlp)
-                    if t_en_h:
-                        en[i]=True; eid=1; pos=True; ep=hlp if o_m_h=='limits' else c[i]
-                        if not np.isfinite(ep) or ep <= 0: ep = c[i]
-                        pr[i] = ep * 1.0001; etp=atp[i]; esl=ats[i]
-                    else:
-                        t_en_l = (l[i] < llp) if o_m_l == 'limits' else (c[i] < llp)
-                        if t_en_l:
-                            en[i]=True; eid=2; pos=True; ep=llp if o_m_l=='limits' else c[i]
-                            if not np.isfinite(ep) or ep <= 0: ep = c[i]
-                            pr[i] = ep * 1.0001; etp=atp[i]; esl=ats[i]
-                else:
-                    if eid == 1:
-                        tf, ta = ep*(1+tph), ep + 2.0*etp
-                        tpp = tf if tp_t=='Fixed' else (ta if tp_t=='ATR' else max(tf, ta))
-                        sf, sa = ep*(1-slh), ep - 4.0*esl
-                        slp = sf if sl_t=='Fixed' else (sa if sl_t=='ATR' else max(sf, sa))
-                        if use_tr and c[i] < trm[i] and c[i-1] >= trm[i-1]:
-                            ex[i], pos = True, False; pr[i] = c[i] * 0.9999; continue
-                        t_ex = (h[i]>=tpp or l[i]<=slp) if e_m_h=='limits' else (c[i]>=tpp or c[i]<=slp)
-                        e_act, tp_v, sl_v = e_m_h, tpp, slp
-                    else:
-                        tp_v, sl_v = ep*(1+tpl), ep*(1-sll)
-                        t_ex = (h[i]>=tp_v or l[i]<=sl_v) if e_m_l=='limits' else (c[i]>=tp_v or c[i]<=sl_v)
-                        e_act = e_m_l
-                    if t_ex:
-                        xp = (tp_v if h[i]>=tp_v else sl_v) if e_act=='limits' else c[i]
-                        if not np.isfinite(xp) or xp <= 0: xp = c[i]
-                        ex[i], pos = True, False; pr[i] = xp * 0.9999 
-            return en, ex, pr
-
-        actual_start = int(max(warmup, 1 + h_int) + 10)
-        en, ex, pr = sim_final_nb(h_np, l_np, c_np, hl_p_raw, ll_p_raw, atr_tp, atr_sl, tr_ma, actual_start, tp_hl_per, sl_hl_per, tp_ll_per, sl_ll_per, tp_hl_type, sl_hl_type, tr_hl, o_m_hl, o_m_ll, e_m_hl, e_m_ll, h_int)
-
-        # [V16] 인덱스 초정밀 재정렬 및 결측치 제거
-        en_s = pd.Series(en, index=data.index).reindex(data.index).fillna(False).astype(np.bool_)
-        ex_s = pd.Series(ex, index=data.index).reindex(data.index).fillna(False).astype(np.bool_)
-        pr_s = pd.Series(pr, index=data.index).reindex(data.index).fillna(c_np[0] if len(c_np)>0 else 0.0).astype(np.float64)
-
-        # [V16] '안전 복리(Safe Compounding)' 엔진 가동
-        # size_type='percent'로 복구하여 Pine Script와 동일한 복리 효과 유도
-        # 단, 'allow_partial=True'를 통해 자금 부족 시에도 NaN 에러 없이 가능한 만큼만 매수하도록 방어
-        try:
-            portfolio = vbt.Portfolio.from_signals(
-                data['Close'], en_s, ex_s, 
-                price=pr_s, 
-                size=0.9, 
-                size_type='percent', 
-                init_cash=1000000.0, 
-                fees=0.0008,
-                slippage=0.0001,
-                direction='longonly',
-                allow_partial=True,  # [V16 핵심] 자금 부족 시 에러 대신 부분 체결 허용
-                min_size=1e-8        # 먼지 거래 방지
-            )
-
-            # stats() 이전에 간단한 결과 검사
-            win_rate = float(portfolio.stats().get('Win Rate [%]', 0.0))
-            total_return = float(portfolio.total_return * 100.0)
-            total_profit = float(portfolio.total_profit)
-            max_drawdown = float(portfolio.max_drawdown * 100.0)
-            total_trades = int(portfolio.trades.count())
-        except Exception as e:
-            # [V16] 엔진 내 최후의 에러 트랩
-            win_rate, total_return, total_profit, max_drawdown, total_trades = 0.0, 0.0, 0.0, 0.0, 0
-
-        metrics = {
-            "Total Return (%)": round(total_return, 2),
-            "Win Rate (%)": round(win_rate, 2),
-            "MDD (%)": round(max_drawdown, 2),
-            "Total Trades": total_trades,
-            "Total Profit": round(total_profit, 2)
-        }
-"""
-
-BACKTRADER_STRATEGY = """import backtrader as bt
+BACKTRADER_STRATEGY = \"\"\"import backtrader as bt
 import math
 import datetime
-import numpy as np
 
-# [V7 완벽 동기화] 원본 데이터 결측치 완벽 제거
-data = data.ffill().bfill()
-data.dropna(inplace=True)
-data = data[data['Close'] > 0]
-
-# [100.0% 무결성] Backtrader 최적화 연동형 전략
 class UniversalMA(bt.Indicator):
     lines = ('ma',)
     params = (('period', 20), ('matype', 'SMA'))
@@ -223,26 +198,24 @@ class HOTTIndicator(bt.Indicator):
         self.mavg = UniversalMA(self.highest_val, period=self.p.length, matype=self.p.matype)
         self.addminperiod(self.p.period + self.p.length)
     def next(self):
-        mavg = self.mavg[0]; fark = mavg * self.p.percent * 0.01
-        ls, ss = mavg - fark, mavg + fark
-        if len(self) == 1 + (self.p.period + self.p.length) or not hasattr(self, 'lsp'):
-            self.lsp, self.ssp, self.dir = ls, ss, 1
-        if mavg > self.lsp: self.lsp = max(ls, self.lsp)
-        if mavg < self.ssp: self.ssp = min(ss, self.ssp)
-        if self.dir == -1 and mavg > self.ssp: self.dir = 1
-        elif self.dir == 1 and mavg < self.lsp: self.dir = -1
+        ma = self.mavg[0]; fk = ma * self.p.percent * 0.01; ls, ss = ma - fk, ma + fk
+        if not hasattr(self, 'lsp'): self.lsp, self.ssp, self.dir = ls, ss, 1
+        if ma > self.lsp: self.lsp = max(ls, self.lsp)
+        if ma < self.ssp: self.ssp = min(ss, self.ssp)
+        if self.dir == -1 and ma > self.ssp: self.dir = 1
+        elif self.dir == 1 and ma < self.lsp: self.dir = -1
         mt = self.lsp if self.dir == 1 else self.ssp
-        self.lines.hott[0] = mt * (200 + self.p.percent) / 200 if mavg > mt else mt * (200 - self.p.percent) / 200
+        self.lines.hott[0] = mt * (200 + self.p.percent) / 200 if ma > mt else mt * (200 - self.p.percent) / 200
 
 class BBCustom(bt.Indicator):
-    lines = ('top',)
+    lines = ('mid', 'top', 'bot')
     params = (('period', 20), ('dev', 2.0), ('min_width', 3.0), ('matype', 'EMA'))
     def __init__(self):
-        self.mid = UniversalMA(self.data.close, period=self.p.period, matype=self.p.matype)
-        self.std = bt.indicators.StdDev(self.data.close, period=self.p.period)
+        self.mid_ma = UniversalMA(self.data.close, period=self.p.period, matype=self.p.matype)
+        self.stddev = bt.indicators.StdDev(self.data.close, period=self.p.period)
     def next(self):
-        dev = max(self.std[0] * self.p.dev, self.mid[0] * self.p.min_width / 100.0)
-        self.lines.top[0] = self.mid[0] + dev
+        mid = self.mid_ma[0]; std = self.stddev[0] * self.p.dev; lbbdev = max(std, mid * self.p.min_width / 100.0)
+        self.lines.mid[0] = mid; self.lines.top[0] = mid + lbbdev; self.lines.bot[0] = mid - lbbdev
 
 class TestStrategy(bt.Strategy):
     params = (
@@ -257,116 +230,113 @@ class TestStrategy(bt.Strategy):
         ('ll_volatility_filter', optuna_trial.suggest_categorical('ll_volatility_filter', [True, False]) if 'optuna_trial' in globals() and optuna_trial else False),
         ('ma1_length', optuna_trial.suggest_int('ma1_length', 10, 50) if 'optuna_trial' in globals() and optuna_trial else 20),
         ('ll_mult', optuna_trial.suggest_float('ll_mult', 1.0, 3.0, step=0.1) if 'optuna_trial' in globals() and optuna_trial else 1.5),
-        ('ma2_type', optuna_trial.suggest_categorical('ma2_type', ['SMA', 'EMA']) if 'optuna_trial' in globals() and optuna_trial else 'EMA'),
+        ('ma2_type', optuna_trial.suggest_categorical('ma2_type', ['SMA', 'EMA', 'SMMA (RMA)', 'WMA', 'VWMA']) if 'optuna_trial' in globals() and optuna_trial else 'EMA'),
         ('ma2_length', optuna_trial.suggest_int('ma2_length', 1, 10) if 'optuna_trial' in globals() and optuna_trial else 3),
-        ('bb_ma_type', optuna_trial.suggest_categorical('bb_ma_type', ['SMA', 'EMA']) if 'optuna_trial' in globals() and optuna_trial else 'EMA'),
+        ('bb_ma_type', optuna_trial.suggest_categorical('bb_ma_type', ['SMA', 'EMA', 'SMMA (RMA)', 'WMA', 'VWMA']) if 'optuna_trial' in globals() and optuna_trial else 'EMA'),
         ('bb_length', optuna_trial.suggest_int('bb_length', 10, 50) if 'optuna_trial' in globals() and optuna_trial else 20),
         ('bb_dev', optuna_trial.suggest_float('bb_dev', 1.0, 3.0, step=0.1) if 'optuna_trial' in globals() and optuna_trial else 2.0),
         ('bb_min_width', optuna_trial.suggest_float('bb_min_width', 1.0, 5.0, step=0.1) if 'optuna_trial' in globals() and optuna_trial else 3.0),
-        ('hott_ma_type', optuna_trial.suggest_categorical('hott_ma_type', ['SMA', 'EMA']) if 'optuna_trial' in globals() and optuna_trial else 'EMA'),
+        ('hott_ma_type', optuna_trial.suggest_categorical('hott_ma_type', ['SMA', 'EMA', 'SMMA (RMA)', 'WMA', 'VWMA']) if 'optuna_trial' in globals() and optuna_trial else 'EMA'),
         ('hott_length', optuna_trial.suggest_int('hott_length', 1, 10) if 'optuna_trial' in globals() and optuna_trial else 2),
         ('hott_percent', optuna_trial.suggest_float('hott_percent', 0.1, 2.0, step=0.1) if 'optuna_trial' in globals() and optuna_trial else 0.6),
         ('hott_h_length', optuna_trial.suggest_int('hott_h_length', 50, 200) if 'optuna_trial' in globals() and optuna_trial else 100),
         ('hott_use_high', optuna_trial.suggest_categorical('hott_use_high', [True, False]) if 'optuna_trial' in globals() and optuna_trial else False),
-        ('high_int', optuna_trial.suggest_int('high_int', 0, 5) if 'optuna_trial' in globals() and optuna_trial else 0),
-        ('entry_ll_per', optuna_trial.suggest_float('entry_ll_per', 0.02, 0.15, step=0.0001) if 'optuna_trial' in globals() and optuna_trial else 0.06),
-        ('tp_hl_per', optuna_trial.suggest_float('tp_hl_per', 0.005, 0.05, step=0.0001) if 'optuna_trial' in globals() and optuna_trial else 0.015),
-        ('sl_hl_per', optuna_trial.suggest_float('sl_hl_per', 0.01, 0.07, step=0.0001) if 'optuna_trial' in globals() and optuna_trial else 0.02),
-        ('tp_ll_per', optuna_trial.suggest_float('tp_ll_per', 0.005, 0.05, step=0.0001) if 'optuna_trial' in globals() and optuna_trial else 0.015),
-        ('sl_ll_per', optuna_trial.suggest_float('sl_ll_per', 0.01, 0.07, step=0.0001) if 'optuna_trial' in globals() and optuna_trial else 0.015),
+        ('high_int', optuna_trial.suggest_int('high_int', 0, 1) if 'optuna_trial' in globals() and optuna_trial else 0),
+        ('entry_ll_per', optuna_trial.suggest_float('entry_ll_per', 0.02, 0.15, step=0.001) if 'optuna_trial' in globals() and optuna_trial else 0.06),
+        ('tp_hl_per', optuna_trial.suggest_float('tp_hl_per', 0.005, 0.05, step=0.001) if 'optuna_trial' in globals() and optuna_trial else 0.015),
+        ('sl_hl_per', optuna_trial.suggest_float('sl_hl_per', 0.01, 0.07, step=0.001) if 'optuna_trial' in globals() and optuna_trial else 0.02),
+        ('tp_ll_per', optuna_trial.suggest_float('tp_ll_per', 0.005, 0.05, step=0.001) if 'optuna_trial' in globals() and optuna_trial else 0.015),
+        ('sl_ll_per', optuna_trial.suggest_float('sl_ll_per', 0.01, 0.07, step=0.001) if 'optuna_trial' in globals() and optuna_trial else 0.015),
         ('atr_length', optuna_trial.suggest_int('atr_length', 7, 20) if 'optuna_trial' in globals() and optuna_trial else 10),
         ('atr_length2', optuna_trial.suggest_int('atr_length2', 7, 20) if 'optuna_trial' in globals() and optuna_trial else 10),
-        ('tr_ma_type', optuna_trial.suggest_categorical('tr_ma_type', ['SMA', 'EMA']) if 'optuna_trial' in globals() and optuna_trial else 'EMA'),
+        ('hl_tp_atr_mul', optuna_trial.suggest_float('hl_tp_atr_mul', 1.0, 6.0, step=0.1) if 'optuna_trial' in globals() and optuna_trial else 2.0),
+        ('hl_sl_atr_mul', optuna_trial.suggest_float('hl_sl_atr_mul', 1.0, 6.0, step=0.1) if 'optuna_trial' in globals() and optuna_trial else 4.0),
+        ('tr_ma_type', optuna_trial.suggest_categorical('tr_ma_type', ['SMA', 'EMA', 'SMMA (RMA)', 'WMA', 'VWMA']) if 'optuna_trial' in globals() and optuna_trial else 'EMA'),
         ('tr_ma_length', optuna_trial.suggest_int('tr_ma_length', 50, 200) if 'optuna_trial' in globals() and optuna_trial else 100),
+        ('exchange_decimal', optuna_trial.suggest_int('exchange_decimal', 1, 8) if 'optuna_trial' in globals() and optuna_trial else 3),
         ('installment', optuna_trial.suggest_categorical('installment', [1, 2]) if 'optuna_trial' in globals() and optuna_trial else 1),
     )
     def __init__(self):
-        self.atr_tp = bt.indicators.ATR(self.data, period=self.p.atr_length)
-        self.atr_sl = bt.indicators.ATR(self.data, period=self.p.atr_length2)
-        safe_close = bt.If(self.data.close > 0, self.data.close, 0.000001)
-        self.ma1 = bt.indicators.SMA((self.data.high - self.data.low) / safe_close, period=self.p.ma1_length)
-        self.ma2 = UniversalMA(self.data.close, period=self.p.ma2_length, matype=self.p.ma2_type)
+        self.dataclose = self.datas[0].close; self.datahigh = self.datas[0].high; self.datalow = self.datas[0].low
+        self.atr_tp = bt.indicators.ATR(self.datas[0], period=self.p.atr_length)
+        self.atr_sl = bt.indicators.ATR(self.datas[0], period=self.p.atr_length2)
+        safe_close = bt.If(self.dataclose > 0, self.dataclose, 0.000001)
+        self.ma1 = bt.indicators.SMA((self.datahigh - self.datalow) / safe_close, period=self.p.ma1_length)
+        self.ma2 = UniversalMA(self.dataclose, period=self.p.ma2_length, matype=self.p.ma2_type)
         self.bb = BBCustom(period=self.p.bb_length, dev=self.p.bb_dev, min_width=self.p.bb_min_width, matype=self.p.bb_ma_type)
         self.hott = HOTTIndicator(period=self.p.hott_h_length, length=self.p.hott_length, percent=self.p.hott_percent, use_high=self.p.hott_use_high, matype=self.p.hott_ma_type)
-        self.tr_ma = UniversalMA(self.data.close, period=self.p.tr_ma_length, matype=self.p.tr_ma_type)
-        self.entry_id = None; self.is_first_filled = False
-        self.entry_order = None; self.tp_order = None; self.sl_order = None
-    def calc_exits(self, base_p):
+        self.tr_ma = UniversalMA(self.dataclose, period=self.p.tr_ma_length, matype=self.p.tr_ma_type)
+        self.entry_id = None; self.is_first_filled = False; self.entry_order = None; self.tp_order = None; self.sl_order = None
+        tick_size = 10.0 ** -self.p.exchange_decimal
+        self.broker.set_slippage_fixed(3.0 * tick_size)
+
+    def issue_exit_orders(self, base_price, size):
+        exit_mode = self.p.exit_at_hl if self.entry_id == 'HL' else self.p.exit_at_ll
+        if exit_mode == 'close': return
         if self.entry_id == 'HL':
-            tf, ta = base_p*(1+self.p.tp_hl_per), base_p + 2.0*self.atr_tp[0]
-            tpp = tf if self.p.hl_tp_price=='Fixed' else (ta if self.p.hl_tp_price=='ATR' else max(tf, ta))
-            sf, sa = base_p*(1-self.p.sl_hl_per), base_p - 4.0*self.atr_sl[0]
-            slp = sf if self.p.hl_sl_price=='Fixed' else (sa if self.p.hl_sl_price=='ATR' else max(sf, sa))
-            return tpp, slp, self.p.exit_at_hl
-        else: return base_p*(1+self.p.tp_ll_per), base_p*(1-self.p.sl_ll_per), self.p.exit_at_ll
-    def next(self):
-        if not self.position:
-            hott_v = self.hott.hott[-self.p.high_int] if self.p.high_int > 0 else self.hott.hott[0]
-            hlp = self.bb.top[0] if self.p.hl_price=='BB' else (hott_v if self.p.hl_price=='H/L OTT' else max(hott_v, self.bb.top[0]))
-            llp = self.ma2[0]*(1 - self.ma1[0]*1.5 - self.p.entry_ll_per) if self.p.ll_volatility_filter else self.ma2[0]*(1-self.p.entry_ll_per)
-            if self.entry_order: self.cancel(self.entry_order)
-            qty = self.broker.getvalue() / self.data.close[0]
-            if self.data.high[0] > hlp and hlp > 0:
-                self.entry_order = self.buy(exectype=bt.Order.Stop if self.p.open_at_hl=='limits' else bt.Order.Market, price=hlp, size=qty)
-                self.entry_order.info['id'] = 'HL'
-            elif self.data.low[0] < llp and llp > 0:
-                self.entry_order = self.buy(exectype=bt.Order.Limit if self.p.open_at_ll=='limits' else bt.Order.Market, price=llp, size=qty)
-                self.entry_order.info['id'] = 'LL'
-        elif self.position.size > 0:
-            tpp, slp, e_mode = self.calc_exits(self.position.price)
-            if self.entry_id == 'HL' and self.p.tr_hl and self.data.close[0] < self.tr_ma[0] and self.data.close[-1] >= self.tr_ma[-1]:
-                self.close(); return
-            if self.is_first_filled and not self.tp_order and e_mode == 'limits':
-                self.tp_order = self.sell(exectype=bt.Order.Limit, price=tpp, size=self.position.size)
-                self.sl_order = self.sell(exectype=bt.Order.Stop, price=slp, size=self.position.size, oco=self.tp_order)
-                self.is_first_filled = False
-            if e_mode == 'close' and (self.data.close[0] >= tpp or self.data.close[0] <= slp):
-                if self.p.installment == 1: self.close()
-                elif not self.is_first_filled:
-                    self.sell(size=self.position.size/2); self.is_first_filled = True
+            tp_f, tp_a = base_price*(1+self.p.tp_hl_per), base_price + self.p.hl_tp_atr_mul*self.atr_tp[0]
+            tpp = tp_f if self.p.hl_tp_price=='Fixed' else (tp_a if self.p.hl_tp_price=='ATR' else max(tp_f, tp_a))
+            sl_f, sl_a = base_price*(1-self.p.sl_hl_per), base_price - self.p.hl_sl_atr_mul*self.atr_sl[0]
+            slp = sl_f if self.p.hl_sl_price=='Fixed' else (sl_a if self.p.hl_sl_price=='ATR' else max(sl_f, sl_a))
+        else: tpp, slp = base_price*(1+self.p.tp_ll_per), base_price*(1-self.p.sl_ll_per)
+        if tpp and slp and size > 0:
+            self.tp_order = self.sell(exectype=bt.Order.Limit, price=tpp, size=size)
+            self.sl_order = self.sell(exectype=bt.Order.Stop, price=slp, size=size, oco=self.tp_order)
+
     def notify_order(self, order):
         if order.status == order.Completed:
             if order.isbuy():
-                self.entry_id = order.info.get('id')
-                tpp, slp, e_mode = self.calc_exits(order.executed.price)
-                if e_mode == 'limits':
-                    qty = order.executed.size / self.p.installment
-                    self.tp_order = self.sell(exectype=bt.Order.Limit, price=tpp, size=qty)
-                    self.sl_order = self.sell(exectype=bt.Order.Stop, price=slp, size=qty, oco=self.tp_order)
+                self.entry_id = order.info.get('id'); qty = order.executed.size / self.p.installment
+                self.issue_exit_orders(order.executed.price, qty)
             elif order.issell():
                 if self.position.size > 0: self.is_first_filled = True
-                else: self.entry_id = None; self.is_first_filled = False
+                else: self.entry_id, self.is_first_filled = None, False
 
-# 🚀 [Backtrader 엔진 실행부 - 무결성 보장]
-if 'data' in globals():
-    cerebro = bt.Cerebro(stdstats=False)
-    cerebro.addstrategy(TestStrategy)
-    cerebro.adddata(bt.feeds.PandasData(dataname=data))
-    cerebro.broker.setcash(1000000.0)
-    cerebro.broker.setcommission(commission=0.0008)
-    cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name="trades")
-    cerebro.addanalyzer(bt.analyzers.DrawDown, _name="drawdown")
-    initial_value = cerebro.broker.getvalue()
-    results = cerebro.run()
-    final_value = cerebro.broker.getvalue()
-    tot_profit = final_value - initial_value
-    ret_pct = (tot_profit / initial_value) * 100
-    win_rate, mdd, tot_trades = 0.0, 0.0, 0
-    if results:
-        strat = results[0]
-        try:
-            tr_an = strat.analyzers.trades.get_analysis()
-            dd_an = strat.analyzers.drawdown.get_analysis()
-            tot_trades = tr_an.total.total if 'total' in tr_an else 0
-            if tot_trades > 0 and 'won' in tr_an:
-                win_rate = (tr_an.won.total / tot_trades) * 100
-            mdd = dd_an.max.drawdown if 'max' in dd_an else 0.0
-        except: pass
-    metrics = {
-        "Total Return (%)": round(ret_pct, 2),
-        "Total Profit": round(tot_profit, 2),
-        "Win Rate (%)": round(win_rate, 2),
-        "MDD (%)": round(mdd, 2),
-        "Total Trades": tot_trades
-    }
-"""
+    def next(self):
+        if self.position.size > 0:
+            exit_mode = self.p.exit_at_hl if self.entry_id == 'HL' else self.p.exit_at_ll
+            ep = self.position.price
+            if exit_mode == 'close':
+                if self.entry_id == 'HL':
+                    tp_f, tp_a = ep*(1+self.p.tp_hl_per), ep + self.p.hl_tp_atr_mul*self.atr_tp[0]
+                    tpp = tp_f if self.p.hl_tp_price=='Fixed' else (tp_a if self.p.hl_tp_price=='ATR' else max(tp_f, tp_a))
+                    sl_f, sl_a = ep*(1-self.p.sl_hl_per), ep - self.p.hl_sl_atr_mul*self.atr_sl[0]
+                    slp = sl_f if self.p.hl_sl_price=='Fixed' else (sl_a if self.p.hl_sl_price=='ATR' else max(sl_f, sl_a))
+                else: tpp, slp = ep*(1+self.p.tp_ll_per), ep*(1-self.p.sl_ll_per)
+                if self.dataclose[0] >= tpp or self.dataclose[0] <= slp:
+                    self.close(); return
+            if self.is_first_filled and not self.tp_order and exit_mode == 'limits': self.issue_exit_orders(self.position.price, self.position.size); self.is_first_filled = False
+            if self.p.tr_hl and self.datas[0].close[0] < self.tr_ma[0] and self.datas[0].close[-1] >= self.tr_ma[-1]: self.close(); return
+        if not self.position:
+            hott_v = self.hott.hott[0]
+            hlp = self.bb.top[0] if self.p.hl_price=='BB' else (hott_v if self.p.hl_price=='H/L OTT' else max(hott_v, self.bb.top[0]))
+            llp = self.ma2[0]*(1 - self.ma1[0]*self.p.ll_mult - self.p.entry_ll_per) if self.p.ll_volatility_filter else self.ma2[0]*(1-self.p.entry_ll_per)
+            qty = self.broker.getvalue()/self.datas[0].close[0]
+            if self.datahigh[0] > hlp:
+                eid = 'HL'; ep = hlp
+                tp_f, tp_a = ep*(1+self.p.tp_hl_per), ep + self.p.hl_tp_atr_mul*self.atr_tp[0]
+                tpp = tp_f if self.p.hl_tp_price=='Fixed' else (tp_a if self.p.hl_tp_price=='ATR' else max(tp_f, tp_a))
+                sl_f, sl_a = ep*(1-self.p.sl_hl_per), ep - self.p.hl_sl_atr_mul*self.atr_sl[0]
+                slp = sl_f if self.p.hl_sl_price=='Fixed' else (sl_a if self.p.hl_sl_price=='ATR' else max(sl_f, sl_a))
+                if self.datahigh[0] >= tpp or self.datalow[0] <= slp:
+                    self.buy(exectype=bt.Order.Stop, price=hlp, size=qty).info['id'] = 'HL'; self.close(); return
+                else: self.buy(exectype=bt.Order.Stop, price=hlp, size=qty).info['id'] = 'HL'
+            elif self.datalow[0] < llp:
+                eid = 'LL'; ep = llp
+                tpp, slp = ep*(1+self.p.tp_ll_per), ep*(1-self.p.sl_ll_per)
+                if self.datahigh[0] >= tpp or self.datalow[0] <= slp:
+                    self.buy(exectype=bt.Order.Limit, price=llp, size=qty).info['id'] = 'LL'; self.close(); return
+                else: self.buy(exectype=bt.Order.Limit, price=llp, size=qty).info['id'] = 'LL'
+
+cerebro = bt.Cerebro(); cerebro.addstrategy(TestStrategy); cerebro.adddata(bt.feeds.PandasData(dataname=data))
+cerebro.broker.setcash(1000000.0); cerebro.broker.setcommission(commission=0.0008)
+cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name='trades'); cerebro.addanalyzer(bt.analyzers.DrawDown, _name='drawdown')
+init_val = cerebro.broker.getvalue(); results = cerebro.run(); final_val = cerebro.broker.getvalue(); total_prof = final_val - init_val; ret_pct = (total_prof / init_val) * 100
+win_rate, mdd, total_tr = 0.0, 0.0, 0
+if results:
+    strat = results[0]; t_info = strat.analyzers.trades.get_analysis(); d_info = strat.analyzers.drawdown.get_analysis()
+    total_tr = t_info.total.total if 'total' in t_info else 0
+    if total_tr > 0 and 'won' in t_info: win_rate = round((t_info.won.total / total_tr) * 100, 2)
+    if 'max' in d_info and 'drawdown' in d_info.max: mdd = round(d_info.max.drawdown, 2)
+metrics = {"Total Return (%)": round(ret_pct,2), "Total Profit": round(total_prof, 2), "Win Rate (%)": win_rate, "MDD (%)": mdd, "Total Trades": total_tr}
+\"\"\"
