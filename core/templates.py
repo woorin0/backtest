@@ -145,7 +145,7 @@ def sim_final_nb(h, l, c, hlp_raw, llp_raw, atp, ats, trm, inst_num, use_tr, o_m
                 tf, ta = ep*(1+tph), ep + tpm*etp; tpp = tf if tp_t=='Fixed' else (ta if tp_t=='ATR' else max(tf, ta))
                 sf, sa = ep*(1-slh), ep - slm*esl; slp = sf if sl_t=='Fixed' else (sa if sl_t=='ATR' else max(sf, sa))
                 if use_tr and not entered and c[i] < trm[i] and c[i-1] >= trm[i-1]:
-                    ex[i], pr[i], sz[i], pos = True, c[i] - slip, -1.0, False; continue
+                    ex[i], pr[i], sz[i], pos = True, c[i] - slip, 1.0, False; continue
                 e_act = e_m_h
             else:
                 tpp, slp, e_act = ep*(1+tpl), ep*(1-sll), e_m_l
