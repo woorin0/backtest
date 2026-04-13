@@ -1,15 +1,18 @@
 # [The Real 100.0% Parity] 전략 템플릿 마스터
 
-VECTORBT_STRATEGY = """# [The Real 100.0% Parity] Vectorbt 초정밀 가속 전략
-import vectorbt as vbt
+VECTORBT_STRATEGY = """import vectorbt as vbt
 import pandas as pd
 import numpy as np
 from numba import njit
 import math
 
-# 1. 데이터 및 파라미터 로드
-c_np, h_np, l_np = data['Close'].values, data['High'].values, data['Low'].values
+# ==========================================
+# [초정밀 엔진] 전처리 및 데이터 로드
+# ==========================================
+c_np, h_np, l_np, o_np = data['Close'].values, data['High'].values, data['Low'].values, data['Open'].values
+v_np = data['Volume'].values if 'Volume' in data.columns else np.ones(len(c_np))
 
+# 파라미터 로드
 if 'optuna_trial' in globals() and optuna_trial:
     hl_price_type = optuna_trial.suggest_categorical('hl_price', ['BB', 'H/L OTT', 'MAX'])
     bb_ma_type, bb_len = optuna_trial.suggest_categorical('bb_ma_type', ['SMA', 'EMA', 'SMMA (RMA)', 'WMA', 'VWMA']), optuna_trial.suggest_int('bb_length', 10, 50)
@@ -17,23 +20,18 @@ if 'optuna_trial' in globals() and optuna_trial:
     hott_ma_type, hott_len = optuna_trial.suggest_categorical('hott_ma_type', ['SMA', 'EMA', 'SMMA (RMA)', 'WMA', 'VWMA']), optuna_trial.suggest_int('hott_length', 1, 10)
     hott_per, hott_h_len = optuna_trial.suggest_float('hott_percent', 0.1, 2.0, step=0.1), optuna_trial.suggest_int('hott_h_length', 50, 200)
     hott_h_src, h_int = optuna_trial.suggest_categorical('hott_h_src', ['High', 'close']), optuna_trial.suggest_int('high_int', 0, 5)
-    
     hl_tp_atr_mul = optuna_trial.suggest_float('hl_tp_atr_mul', 1.0, 6.0, step=0.1)
     hl_sl_atr_mul = optuna_trial.suggest_float('hl_sl_atr_mul', 1.0, 6.0, step=0.1)
-    
     o_m_hl, o_m_ll = optuna_trial.suggest_categorical('open_at_hl', ['limits', 'close']), optuna_trial.suggest_categorical('open_at_ll', ['limits', 'close'])
     e_m_hl, e_m_ll = optuna_trial.suggest_categorical('exit_at_hl', ['limits', 'close']), optuna_trial.suggest_categorical('exit_at_ll', ['limits', 'close'])
-    
     tp_hl_type, sl_hl_type = optuna_trial.suggest_categorical('hl_tp_price', ['Fixed', 'ATR', 'both']), optuna_trial.suggest_categorical('hl_sl_price', ['Fixed', 'ATR', 'both'])
     ma2_type, ma2_len, ma1_len = optuna_trial.suggest_categorical('ma2_type', ['SMA', 'EMA', 'SMMA (RMA)', 'WMA', 'VWMA']), optuna_trial.suggest_int('ma2_len', 1, 10), optuna_trial.suggest_int('ma1_len', 10, 50)
     tr_ma_type, tr_ma_len = optuna_trial.suggest_categorical('tr_ma_type', ['SMA', 'EMA', 'SMMA (RMA)', 'WMA', 'VWMA']), optuna_trial.suggest_int('tr_ma_len', 50, 200)
     atr_len, atr_len2 = optuna_trial.suggest_int('atr_length', 7, 20), optuna_trial.suggest_int('atr_length2', 7, 20)
     ll_mult, ll_vol_filter = optuna_trial.suggest_float('ll_mult', 1.0, 3.0, step=0.1), optuna_trial.suggest_categorical('ll_volatility_filter', [True, False])
     en_ll_per = optuna_trial.suggest_float('entry_ll_per', 0.02, 0.15, step=0.001)
-    
     tp_hl_per, sl_hl_per = optuna_trial.suggest_float('tp_hl_per', 0.005, 0.05, step=0.001), optuna_trial.suggest_float('sl_hl_per', 0.01, 0.07, step=0.001)
     tp_ll_per, sl_ll_per = optuna_trial.suggest_float('tp_ll_per', 0.005, 0.05, step=0.001), optuna_trial.suggest_float('sl_ll_per', 0.01, 0.07, step=0.001)
-    
     ex_dec, inst, tr_hl, slippage_ticks = optuna_trial.suggest_int('exchange_decimal', 1, 8), optuna_trial.suggest_categorical('installment', [1, 2]), optuna_trial.suggest_categorical('tr_hl', [True, False]), 3
 else:
     hl_price_type, bb_ma_type, bb_len, bb_dev_in, bb_min_w = 'H/L OTT', 'EMA', 20, 2.0, 3.0
@@ -46,7 +44,9 @@ else:
     tp_hl_per, sl_hl_per, tp_ll_per, sl_ll_per = 0.015, 0.02, 0.015, 0.015
     ex_dec, inst, tr_hl, slippage_ticks = 3, 1, True, 3
 
-# 2. 초고속 Numba 지표 엔진
+# ==========================================
+# [지표 엔진] Numba 가속 MA/HOTT/BB
+# ==========================================
 @njit
 def n_sma(s, l):
     res = np.full(len(s), np.nan)
@@ -92,7 +92,6 @@ def calc_ma_vbt(s, v, l, t):
     elif t == 'VWMA': return n_vwma(s.values, v.values, l)
     return n_sma(s.values, l)
 
-vol_np = data['Volume'].values if 'Volume' in data.columns else np.ones(len(c_np))
 bb_mid = calc_ma_vbt(data['Close'], data['Volume'] if 'Volume' in data.columns else None, bb_len, bb_ma_type)
 bb_std = data['Close'].rolling(bb_len).std().values
 bb_dev = np.maximum(bb_std * bb_dev_in, bb_mid * bb_min_w / 100.0)
@@ -122,45 +121,81 @@ ma1 = ((data['High'] - data['Low']) / data['Close'].replace(0, 0.0001)).rolling(
 ma2 = calc_ma_vbt(data['Close'], data['Volume'] if 'Volume' in data.columns else None, ma2_len, ma2_type)
 tr_ma = calc_ma_vbt(data['Close'], data['Volume'] if 'Volume' in data.columns else None, tr_ma_len, tr_ma_type)
 
-hl_p_raw, ll_p_raw = (hott_v if hl_price_type == 'H/L OTT' else (bb_u if hl_price_type == 'BB' else np.maximum(hott_v, bb_u))), (ma2 * (1 - ma1 * ll_mult - en_ll_per) if ll_vol_filter else ma2 * (1 - en_ll_per))
+hl_p_triggers = (hott_v if hl_price_type == 'H/L OTT' else (bb_u if hl_price_type == 'BB' else np.maximum(hott_v, bb_u)))
+ll_p_triggers = (ma2 * (1 - ma1 * ll_mult - en_ll_per) if ll_vol_filter else ma2 * (1 - en_ll_per))
 
-# 3. 초정밀 시뮬레이터 (Intra-bar Exit & Tick Slippage)
+# ==========================================
+# [중요: 100% Parity] 저수준 주문 함수 (Order Func)
+# ==========================================
 @njit
-def sim_final_nb(h, l, c, hlp_raw, llp_raw, atp, ats, trm, inst_num, use_tr, o_m_h, o_m_l, e_m_h, e_m_l, tp_t, sl_t, h_i, tph, slh, tpl, sll, tpm, slm, slip):
-    n = len(c); en, ex, pr, sz = np.zeros(n, dtype=np.bool_), np.zeros(n, dtype=np.bool_), np.zeros(n), np.zeros(n)
-    pos, ep, etp, esl, pf, bfe, eid = False, 0.0, 0.0, 0.0, 0, -1, 0
-    for i in range(1 + h_i, n):
-        hlp, llp = hlp_raw[i-1-h_i], llp_raw[i-1]; entered = False
-        if not pos:
-            t_en_h = (h[i] > hlp) if o_m_h == 'limits' else (c[i] > hlp)
-            if t_en_h and hlp > 0:
-                en[i]=True; eid=1; pos=True; pr[i]=(hlp if o_m_h=='limits' else c[i]) + slip; ep=pr[i]; etp=atp[i]; esl=ats[i]; sz[i]=1.0; entered=True
-            else:
-                t_en_l = (l[i] < llp) if o_m_l == 'limits' else (c[i] < llp)
-                if t_en_l and llp > 0:
-                    en[i]=True; eid=2; pos=True; pr[i]=(llp if o_m_l=='limits' else c[i]) + slip; ep=pr[i]; etp=atp[i]; esl=ats[i]; sz[i]=1.0; entered=True
+def order_func_nb(c, o, h, l, cl, hlp_t, llp_t, atp, ats, trm, 
+                  inst_num, use_tr, o_m_h, o_m_l, e_m_h, e_m_l, tp_t, sl_t, h_i, 
+                  tph, slh, tpl, sll, tpm, slm, slip_ticks, dec):
+    
+    i = c.i; col = c.col
+    if i < 1 + h_i: return vbt.nb.order_nothing_nb
+    
+    pos = c.position[col]
+    cash = c.cash[col]
+    
+    def get_qty(val, d): return math.floor(val * (10**d)) / (10.0**d)
+    
+    tick = 10.0**-dec; slip = slip_ticks * tick
+    
+    # 1. 포지션이 없을 때 (진입)
+    if pos == 0:
+        hlp, llp = hlp_t[i-1-h_i], llp_t[i-1]
+        if hlp <= 0 and llp <= 0: return vbt.nb.order_nothing_nb
         
-        if pos:
-            if eid == 1:
-                tf, ta = ep*(1+tph), ep + tpm*etp; tpp = tf if tp_t=='Fixed' else (ta if tp_t=='ATR' else max(tf, ta))
-                sf, sa = ep*(1-slh), ep - slm*esl; slp = sf if sl_t=='Fixed' else (sa if sl_t=='ATR' else max(sf, sa))
-                if use_tr and not entered and c[i] < trm[i] and c[i-1] >= trm[i-1]:
-                    ex[i], pr[i], sz[i], pos = True, c[i] - slip, 1.0, False; continue
-                e_act = e_m_h
-            else:
-                tpp, slp, e_act = ep*(1+tpl), ep*(1-sll), e_m_l
+        t_en_h = (h[i] > hlp) if o_m_h == 'limits' else (cl[i] > hlp)
+        if t_en_h:
+            entry_p = (max(o[i], hlp) if o_m_h == 'limits' else cl[i]) + slip
+            qty = get_qty(cash / entry_p, dec)
+            return vbt.nb.order_nb(size=qty, price=entry_p, size_type=vbt.nb.SizeType.Amount)
+        
+        t_en_l = (l[i] < llp) if o_m_l == 'limits' else (cl[i] < llp)
+        if t_en_l:
+            entry_p = (min(o[i], llp) if o_m_l == 'limits' else cl[i]) + slip
+            qty = get_qty(cash / entry_p, dec)
+            return vbt.nb.order_nb(size=qty, price=entry_p, size_type=vbt.nb.SizeType.Amount)
             
-            t_ex = (h[i]>=tpp or l[i]<=slp) if e_act=='limits' else (c[i]>=tpp or c[i]<=slp)
-            if t_ex:
-                xp = (tpp if h[i]>=tpp else slp) if e_act=='limits' else c[i]
-                if inst_num == 1: ex[i], pr[i], sz[i], pos = True, xp - slip, 1.0, False
-                elif pf == 0: ex[i], pr[i], sz[i], pf, bfe = True, xp - slip, 0.5, 1, i
-                elif i > bfe: ex[i], pr[i], sz[i], pos = True, xp - slip, 1.0, False
-    return en, ex, pr, sz
+    # 2. 포지션이 있을 때 (청산)
+    if pos > 0:
+        if use_tr and cl[i] < trm[i] and cl[i-1] >= trm[i-1]:
+            exit_p = cl[i] - slip
+            return vbt.nb.order_nb(size=-pos, price=exit_p, size_type=vbt.nb.SizeType.Amount)
+        
+        ep = c.last_pos_price[col]
+        tf, ta = ep*(1+tph), ep + tpm*atp[i]; tpp = tf if tp_t=='Fixed' else (ta if tp_t=='ATR' else max(tf, ta))
+        sf, sa = ep*(1-slh), ep - slm*ats[i]; slp = sf if sl_t=='Fixed' else (sa if sl_t=='ATR' else max(sf, sa))
+        
+        is_hit = (h[i] >= tpp or l[i] <= slp) if e_m_h == 'limits' else (cl[i] >= tpp or cl[i] <= slp)
+        if is_hit:
+            exit_p = (tpp if h[i] >= tpp else slp) if e_m_h == 'limits' else cl[i]
+            if e_m_h == 'limits':
+                if o[i] >= tpp or o[i] <= slp: exit_p = o[i]
+            exit_p -= slip
+            
+            if inst_num == 2 and pos > get_qty(c.last_pos_size[col]*0.6, dec):
+                return vbt.nb.order_nb(size=-get_qty(pos/2, dec), price=exit_p, size_type=vbt.nb.SizeType.Amount)
+            else:
+                return vbt.nb.order_nb(size=-pos, price=exit_p, size_type=vbt.nb.SizeType.Amount)
+                
+    return vbt.nb.order_nothing_nb
 
-tick_val = slippage_ticks * (10 ** -ex_dec)
-en, ex, pr, sz = sim_final_nb(h_np, l_np, c_np, hl_p_raw, ll_p_raw, atr_tp, atr_sl, tr_ma, inst, tr_hl, o_m_hl, o_m_ll, e_m_hl, e_m_ll, tp_hl_type, sl_hl_type, h_int, tp_hl_per, sl_hl_per, tp_ll_per, sl_ll_per, hl_tp_atr_mul, hl_sl_atr_mul, tick_val)
-portfolio = vbt.Portfolio.from_signals(data['Close'], en, ex, price=pr, size=sz, size_type='percent', init_cash=1000000, fees=0.0008, slippage=0)
+# 시뮬레이션 실행
+portfolio = vbt.Portfolio.from_order_func(
+    data['Close'],
+    order_func_nb,
+    o_np, h_np, l_np, c_np, hl_p_triggers, ll_p_triggers, atr_tp, atr_sl, tr_ma,
+    inst, tr_hl, o_m_hl, o_m_ll, e_m_hl, e_m_ll, tp_hl_type, sl_hl_type, h_int,
+    tp_hl_per, sl_hl_per, tp_ll_per, sl_ll_per, hl_tp_atr_mul, hl_sl_atr_mul, slippage_ticks, ex_dec,
+    flexible=True,
+    init_cash=1000000,
+    fees=0.0008,
+    cash_sharing=True
+)
+
 stats = portfolio.stats()
 metrics = {
     "Total Return (%)": round(np.nan_to_num(float(portfolio.total_return() * 100.0)), 2),
@@ -303,7 +338,7 @@ class TestStrategy(bt.Strategy):
             if exit_mode == 'close':
                 if self.entry_id == 'HL':
                     tp_f, tp_a = ep*(1+self.p.tp_hl_per), ep + self.p.hl_tp_atr_mul*self.atr_tp[0]
-                    tpp = tp_f if self.p.hl_tp_price=='Fixed' else (tp_a if self.p.hl_tp_price=='ATR' else max(tp_f, tp_a))
+                    tpp = tp_f if self.p.hl_tp_price=='Fixed' else (tp_a if self.p.hl_tp_price=='ATR' else max(tp_f, ta))
                     sl_f, sl_a = ep*(1-self.p.sl_hl_per), ep - self.p.hl_sl_atr_mul*self.atr_sl[0]
                     slp = sl_f if self.p.hl_sl_price=='Fixed' else (sl_a if self.p.hl_sl_price=='ATR' else max(sl_f, sl_a))
                 else: tpp, slp = ep*(1+self.p.tp_ll_per), ep*(1-self.p.sl_ll_per)
@@ -318,4 +353,16 @@ class TestStrategy(bt.Strategy):
             qty = self.get_qty(self.broker.getvalue() / self.datas[0].close[0])
             if self.datahigh[0] > hlp: self.buy(exectype=bt.Order.Stop, price=hlp, size=qty).info['id'] = 'HL'
             elif self.datalow[0] < llp: self.buy(exectype=bt.Order.Limit, price=llp, size=qty).info['id'] = 'LL'
+
+cerebro = bt.Cerebro(); cerebro.addstrategy(TestStrategy); cerebro.adddata(bt.feeds.PandasData(dataname=data))
+cerebro.broker.setcash(1000000.0); cerebro.broker.setcommission(commission=0.0008)
+cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name='trades'); cerebro.addanalyzer(bt.analyzers.DrawDown, _name='drawdown')
+init_val = cerebro.broker.getvalue(); results = cerebro.run(); final_val = cerebro.broker.getvalue(); total_prof = final_val - init_val; ret_pct = (total_prof / init_val) * 100
+win_rate, mdd, total_tr = 0.0, 0.0, 0
+if results:
+    strat = results[0]; t_info = strat.analyzers.trades.get_analysis(); d_info = strat.analyzers.drawdown.get_analysis()
+    total_tr = t_info.total.total if 'total' in t_info else 0
+    if total_tr > 0 and 'won' in t_info: win_rate = round((t_info.won.total / total_tr) * 100, 2)
+    if 'max' in d_info and 'drawdown' in d_info.max: mdd = round(d_info.max.drawdown, 2)
+metrics = {"Total Return (%)": round(ret_pct,2), "Total Profit": round(total_prof, 2), "Win Rate (%)": win_rate, "MDD (%)": mdd, "Total Trades": total_tr}
 \"\"\"
