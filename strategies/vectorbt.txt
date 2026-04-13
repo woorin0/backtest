@@ -146,17 +146,15 @@ else:
         actual_start = int(max(warmup, 1 + h_int) + 10)
         en, ex, pr = sim_final_nb(h_np, l_np, c_np, hl_p_raw, ll_p_raw, atr_tp, atr_sl, tr_ma, actual_start, tp_hl_per, sl_hl_per, tp_ll_per, sl_ll_per, tp_hl_type, sl_hl_type, tr_hl, o_m_hl, o_m_ll, e_m_hl, e_m_ll, h_int)
 
-        # [V14] 인덱스 동기화: 넘파이 배열을 원본 데이터 인덱스의 Series로 변환
-        # 인덱스 미매칭으로 인한 내부 NaN 생성을 원천 봉쇄
-        en_s = pd.Series(en, index=data.index)
-        ex_s = pd.Series(ex, index=data.index)
-        pr_s = pd.Series(pr, index=data.index)
+        # [V16] 인덱스 초정밀 재정렬 및 결측치 제거
+        en_s = pd.Series(en, index=data.index).reindex(data.index).fillna(False).astype(np.bool_)
+        ex_s = pd.Series(ex, index=data.index).reindex(data.index).fillna(False).astype(np.bool_)
+        pr_s = pd.Series(pr, index=data.index).reindex(data.index).fillna(c_np[0] if len(c_np)>0 else 0.0).astype(np.float64)
 
-        # [V14] 최종 검문 2: Series 변환 후에도 유효한지 체크
-        if not (np.isfinite(pr_s.values).all() and np.isfinite(c_np).all()):
-             metrics = {"Total Return (%)": 0.0, "Win Rate (%)": 0.0, "MDD (%)": 0.0, "Total Trades": 0, "Total Profit": 0.0}
-        else:
-            # 안전 마진(size=0.9), 정식 slippage(0.0001) 파라미터 사용
+        # [V16] '안전 복리(Safe Compounding)' 엔진 가동
+        # size_type='percent'로 복구하여 Pine Script와 동일한 복리 효과 유도
+        # 단, 'allow_partial=True'를 통해 자금 부족 시에도 NaN 에러 없이 가능한 만큼만 매수하도록 방어
+        try:
             portfolio = vbt.Portfolio.from_signals(
                 data['Close'], en_s, ex_s, 
                 price=pr_s, 
@@ -165,23 +163,25 @@ else:
                 init_cash=1000000.0, 
                 fees=0.0008,
                 slippage=0.0001,
-                direction='longonly'
+                direction='longonly',
+                allow_partial=True,  # [V16 핵심] 자금 부족 시 에러 대신 부분 체결 허용
+                min_size=1e-8        # 먼지 거래 방지
             )
 
-            try:
-                # stats() 이전에 간단한 결과 검사
-                win_rate = float(portfolio.stats().get('Win Rate [%]', 0.0))
-                total_return = float(portfolio.total_return * 100.0)
-                total_profit = float(portfolio.total_profit)
-                max_drawdown = float(portfolio.max_drawdown * 100.0)
-                total_trades = int(portfolio.trades.count())
-            except:
-                win_rate, total_return, total_profit, max_drawdown, total_trades = 0.0, 0.0, 0.0, 0.0, 0
+            # stats() 이전에 간단한 결과 검사
+            win_rate = float(portfolio.stats().get('Win Rate [%]', 0.0))
+            total_return = float(portfolio.total_return * 100.0)
+            total_profit = float(portfolio.total_profit)
+            max_drawdown = float(portfolio.max_drawdown * 100.0)
+            total_trades = int(portfolio.trades.count())
+        except Exception as e:
+            # [V16] 엔진 내 최후의 에러 트랩
+            win_rate, total_return, total_profit, max_drawdown, total_trades = 0.0, 0.0, 0.0, 0.0, 0
 
-            metrics = {
-                "Total Return (%)": round(total_return, 2),
-                "Win Rate (%)": round(win_rate, 2),
-                "MDD (%)": round(max_drawdown, 2),
-                "Total Trades": total_trades,
-                "Total Profit": round(total_profit, 2)
-            }
+        metrics = {
+            "Total Return (%)": round(total_return, 2),
+            "Win Rate (%)": round(win_rate, 2),
+            "MDD (%)": round(max_drawdown, 2),
+            "Total Trades": total_trades,
+            "Total Profit": round(total_profit, 2)
+        }
