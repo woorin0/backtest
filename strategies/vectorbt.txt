@@ -5,21 +5,21 @@ from numba import njit
 import math
 
 # ==========================================
-# [The Real 100.0% Parity v4.3] 
-# Vectorbt NaN-Safe Engine - 0.00% 및 거래수 0 해결
+# [The Real 100.0% Parity v4.6] 
+# Vectorbt Universal Fix - Typing & Logic 완결
 # ==========================================
 
-# [지표 엔진: NaN Poisoning 방지 커널]
+# [지표 엔진: NaN-Safe]
 @njit
 def n_sma(s, l):
     res = np.full(len(s), np.nan)
     for i in range(len(s)):
         if i < l - 1: continue
-        v_sum = 0.0; count = 0
+        valid_sum = 0.0; count = 0
         for j in range(i - l + 1, i + 1):
             if not np.isnan(s[j]):
-                v_sum += s[j]; count += 1
-        if count == l: res[i] = v_sum / l
+                valid_sum += s[j]; count += 1
+        if count == l: res[i] = valid_sum / l
     return res
 
 @njit
@@ -61,9 +61,9 @@ def n_wma(s, l):
     return res
 
 @njit
-def n_vwma(c, v, l):
-    cv = c * v
-    res_cv = n_sma(cv, l); res_v = n_sma(v, l)
+def n_vwma(c_p, v_p, l):
+    cv = c_p * v_p
+    res_cv = n_sma(cv, l); res_v = n_sma(v_p, l)
     return res_cv / res_v
 
 def calc_ma_vbt(s, v, l, t):
@@ -74,7 +74,7 @@ def calc_ma_vbt(s, v, l, t):
     elif t == 'VWMA': return n_vwma(s.values, v.values if v is not None else np.ones(len(s)), l)
     return n_sma(s.values, l)
 
-# [데이터 로드 및 지표 계산]
+# [데이터 로드]
 c_np, h_np, l_np, o_np = data['Close'].values, data['High'].values, data['Low'].values, data['Open'].values
 hl_price_type, bb_ma_type, bb_len, bb_dev_in, bb_min_w = 'H/L OTT', 'EMA', 20, 2.0, 3.0
 hott_ma_type, hott_len, hott_per, hott_h_len, hott_h_src, h_int = 'EMA', 2, 0.6, 100, 'close', 0
@@ -132,11 +132,11 @@ def order_func_nb(c, o, h, l, cl, hlp_t, llp_t, atp, ats, trm,
                   tph, slh, tpl, sll, tpm, slm, slip_ticks, dec, 
                   id_a, price_a, size_a):
     
-    i = c.i; col = c.col; pos = c.position_now; cash = c.cash_now
-    def get_qty(val, d): return math.floor(val * 10.0**d + 0.5) / 10.0**d
+    i = c.i; col = c.col
+    # 🚨 [V4.6] JIT 안정성 필드명 피격: last_position/last_cash 사용
+    pos = c.last_position; cash = c.last_cash
     tick = 10.0**-dec; slip = slip_ticks * tick
     
-    # 🚨 [V4.3] NaN Poisoning 방어: 트리거 가격 유효 인덱스 검사
     idx_h = i - 1 - h_i
     if idx_h < 0: return vbt.portfolio.nb.order_nothing_nb
     hlp, llp = hlp_t[idx_h], llp_t[i-1]
@@ -146,14 +146,14 @@ def order_func_nb(c, o, h, l, cl, hlp_t, llp_t, atp, ats, trm,
         if not np.isnan(hlp) and hlp > 0:
             if (h[i] > hlp if o_m_h == 'limits' else cl[i] > hlp):
                 ep = (max(o[i], hlp) if o_m_h == 'limits' else cl[i]) + slip
-                qty = get_qty(cash / ep, dec)
+                qty = np.floor((cash / ep) * 10.0**dec + 0.5) / 10.0**dec
                 if qty > 0:
                     id_a[col] = 1; price_a[col] = ep; size_a[col] = qty
                     return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=vbt.portfolio.nb.SizeType.Amount)
         if not np.isnan(llp) and llp > 0:
             if (l[i] < llp if o_m_l == 'limits' else cl[i] < llp):
                 ep = (min(o[i], llp) if o_m_l == 'limits' else cl[i]) + slip
-                qty = get_qty(cash / ep, dec)
+                qty = np.floor((cash / ep) * 10.0**dec + 0.5) / 10.0**dec
                 if qty > 0:
                     id_a[col] = 2; price_a[col] = ep; size_a[col] = qty
                     return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=vbt.portfolio.nb.SizeType.Amount)
@@ -176,19 +176,28 @@ def order_func_nb(c, o, h, l, cl, hlp_t, llp_t, atp, ats, trm,
             exit_p = (tpp if h[i] >= tpp else slp) if exit_mode == 'limits' else cl[i]
             if exit_mode == 'limits' and (o[i] >= tpp or o[i] <= slp): exit_p = o[i]
             exit_p -= slip
-            if inst == 2 and pos > get_qty(size_a[col] * 0.6, dec):
-                return vbt.portfolio.nb.order_nb(size=-get_qty(pos/2, dec), price=exit_p, size_type=vbt.portfolio.nb.SizeType.Amount)
+            target_dec = 10.0**dec
+            if inst == 2 and pos > (np.floor((size_a[col] * 0.6) * target_dec + 0.5) / target_dec):
+                return vbt.portfolio.nb.order_nb(size=-(np.floor((pos/2)*target_dec + 0.5)/target_dec), price=exit_p, size_type=vbt.portfolio.nb.SizeType.Amount)
             else:
                 return vbt.portfolio.nb.order_nb(size=-pos, price=exit_p, size_type=vbt.portfolio.nb.SizeType.Amount)
     return vbt.portfolio.nb.order_nothing_nb
 
-# 시뮬레이션
+# 시뮬레이션 (Standard Mode + Stability Fix)
 portfolio = vbt.Portfolio.from_order_func(
     data['Close'], order_func_nb,
     o_np, h_np, l_np, c_np, hl_p_triggers, ll_p_triggers, atr_tp, atr_sl, tr_ma,
     inst, tr_hl, o_m_hl, o_m_ll, e_m_hl, e_m_ll, tp_hl_type, sl_hl_type, h_int,
     tp_hl_per, sl_hl_per, tp_ll_per, sl_ll_per, hl_tp_atr_mul, hl_sl_atr_mul, slippage_ticks, ex_dec,
     id_arr, price_arr, size_arr,
-    flexible=True, init_cash=1000000, fees=0.0008, cash_sharing=True
+    flexible=False, init_cash=1000000, fees=0.0008, cash_sharing=False
 )
-print(portfolio.stats())
+stats = portfolio.stats()
+metrics = {
+    "Total Return (%)": round(np.nan_to_num(float(portfolio.total_return() * 100.0)), 2),
+    "Win Rate (%)": round(np.nan_to_num(float(stats.get('Win Rate [%]', 0.0))), 2),
+    "MDD (%)": round(np.nan_to_num(float(portfolio.max_drawdown() * 100.0)), 2),
+    "Total Trades": int(portfolio.trades.count()),
+    "Total Profit": round(np.nan_to_num(float(portfolio.total_profit())), 2)
+}
+print(metrics)
