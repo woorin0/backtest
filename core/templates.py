@@ -93,7 +93,7 @@ def calc_ma_vbt(s, v, l, t):
     return n_sma(s.values, l)
 
 bb_mid = calc_ma_vbt(data['Close'], data['Volume'] if 'Volume' in data.columns else None, bb_len, bb_ma_type)
-bb_std = data['Close'].rolling(bb_len).std().values
+bb_std = data['Close'].rolling(bb_len).std(ddof=0).values
 bb_dev = np.maximum(bb_std * bb_dev_in, bb_mid * bb_min_w / 100.0)
 bb_u = bb_mid + bb_dev
 h_src = data['High'] if hott_h_src == 'High' else data['Close']
@@ -127,61 +127,68 @@ ll_p_triggers = (ma2 * (1 - ma1 * ll_mult - en_ll_per) if ll_vol_filter else ma2
 # ==========================================
 # [중요: 100% Parity] 저수준 주문 함수 (Order Func)
 # ==========================================
+entry_state = np.zeros(1, dtype=np.int32) 
+
 @njit
 def order_func_nb(c, o, h, l, cl, hlp_t, llp_t, atp, ats, trm, 
                   inst_num, use_tr, o_m_h, o_m_l, e_m_h, e_m_l, tp_t, sl_t, h_i, 
-                  tph, slh, tpl, sll, tpm, slm, slip_ticks, dec):
+                  tph, slh, tpl, sll, tpm, slm, slip_ticks, dec, state_arr):
     
     i = c.i; col = c.col
-    if i < 1 + h_i: return vbt.nb.order_nothing_nb
+    if i < 1 + h_i: return vbt.portfolio.nb.order_nothing_nb
     
     pos = c.position[col]
     cash = c.cash[col]
     
-    def get_qty(val, d): return math.floor(val * (10**d)) / (10.0**d)
+    def get_qty(val, d): 
+        mult = 10.0**d
+        return math.floor(val * mult + 0.5) / mult
     
     tick = 10.0**-dec; slip = slip_ticks * tick
     
-    # 1. 포지션이 없을 때 (진입)
     if pos == 0:
         hlp, llp = hlp_t[i-1-h_i], llp_t[i-1]
-        if hlp <= 0 and llp <= 0: return vbt.nb.order_nothing_nb
-        
         t_en_h = (h[i] > hlp) if o_m_h == 'limits' else (cl[i] > hlp)
-        if t_en_h:
+        if t_en_h and hlp > 0:
             entry_p = (max(o[i], hlp) if o_m_h == 'limits' else cl[i]) + slip
             qty = get_qty(cash / entry_p, dec)
-            return vbt.nb.order_nb(size=qty, price=entry_p, size_type=vbt.nb.SizeType.Amount)
+            state_arr[col] = 1 
+            return vbt.portfolio.nb.order_nb(size=qty, price=entry_p, size_type=vbt.portfolio.nb.SizeType.Amount)
         
         t_en_l = (l[i] < llp) if o_m_l == 'limits' else (cl[i] < llp)
-        if t_en_l:
+        if t_en_l and llp > 0:
             entry_p = (min(o[i], llp) if o_m_l == 'limits' else cl[i]) + slip
             qty = get_qty(cash / entry_p, dec)
-            return vbt.nb.order_nb(size=qty, price=entry_p, size_type=vbt.nb.SizeType.Amount)
+            state_arr[col] = 2 
+            return vbt.portfolio.nb.order_nb(size=qty, price=entry_p, size_type=vbt.portfolio.nb.SizeType.Amount)
             
-    # 2. 포지션이 있을 때 (청산)
     if pos > 0:
         if use_tr and cl[i] < trm[i] and cl[i-1] >= trm[i-1]:
             exit_p = cl[i] - slip
-            return vbt.nb.order_nb(size=-pos, price=exit_p, size_type=vbt.nb.SizeType.Amount)
+            return vbt.portfolio.nb.order_nb(size=-pos, price=exit_p, size_type=vbt.portfolio.nb.SizeType.Amount)
         
         ep = c.last_pos_price[col]
-        tf, ta = ep*(1+tph), ep + tpm*atp[i]; tpp = tf if tp_t=='Fixed' else (ta if tp_t=='ATR' else max(tf, ta))
-        sf, sa = ep*(1-slh), ep - slm*ats[i]; slp = sf if sl_t=='Fixed' else (sa if sl_t=='ATR' else max(sf, sa))
+        cur_state = state_arr[col]
+        if cur_state == 1: 
+            tf, ta = ep*(1+tph), ep + tpm*atp[i]; tpp = tf if tp_t=='Fixed' else (ta if tp_t=='ATR' else max(tf, ta))
+            sf, sa = ep*(1-slh), ep - slm*ats[i]; slp = sf if sl_t=='Fixed' else (sa if sl_t=='ATR' else max(sf, sa))
+            exit_mode = e_m_h
+        else: 
+            tpp, slp = ep*(1+tpl), ep*(1-sll)
+            exit_mode = e_m_l
         
-        is_hit = (h[i] >= tpp or l[i] <= slp) if e_m_h == 'limits' else (cl[i] >= tpp or cl[i] <= slp)
+        is_hit = (h[i] >= tpp or l[i] <= slp) if exit_mode == 'limits' else (cl[i] >= tpp or cl[i] <= slp)
         if is_hit:
-            exit_p = (tpp if h[i] >= tpp else slp) if e_m_h == 'limits' else cl[i]
-            if e_m_h == 'limits':
+            exit_p = (tpp if h[i] >= tpp else slp) if exit_mode == 'limits' else cl[i]
+            if exit_mode == 'limits':
                 if o[i] >= tpp or o[i] <= slp: exit_p = o[i]
             exit_p -= slip
-            
             if inst_num == 2 and pos > get_qty(c.last_pos_size[col]*0.6, dec):
-                return vbt.nb.order_nb(size=-get_qty(pos/2, dec), price=exit_p, size_type=vbt.nb.SizeType.Amount)
+                return vbt.portfolio.nb.order_nb(size=-get_qty(pos/2, dec), price=exit_p, size_type=vbt.portfolio.nb.SizeType.Amount)
             else:
-                return vbt.nb.order_nb(size=-pos, price=exit_p, size_type=vbt.nb.SizeType.Amount)
+                return vbt.portfolio.nb.order_nb(size=-pos, price=exit_p, size_type=vbt.portfolio.nb.SizeType.Amount)
                 
-    return vbt.nb.order_nothing_nb
+    return vbt.portfolio.nb.order_nothing_nb
 
 # 시뮬레이션 실행
 portfolio = vbt.Portfolio.from_order_func(
@@ -190,6 +197,7 @@ portfolio = vbt.Portfolio.from_order_func(
     o_np, h_np, l_np, c_np, hl_p_triggers, ll_p_triggers, atr_tp, atr_sl, tr_ma,
     inst, tr_hl, o_m_hl, o_m_ll, e_m_hl, e_m_ll, tp_hl_type, sl_hl_type, h_int,
     tp_hl_per, sl_hl_per, tp_ll_per, sl_ll_per, hl_tp_atr_mul, hl_sl_atr_mul, slippage_ticks, ex_dec,
+    entry_state, 
     flexible=True,
     init_cash=1000000,
     fees=0.0008,
@@ -338,7 +346,7 @@ class TestStrategy(bt.Strategy):
             if exit_mode == 'close':
                 if self.entry_id == 'HL':
                     tp_f, tp_a = ep*(1+self.p.tp_hl_per), ep + self.p.hl_tp_atr_mul*self.atr_tp[0]
-                    tpp = tp_f if self.p.hl_tp_price=='Fixed' else (tp_a if self.p.hl_tp_price=='ATR' else max(tp_f, ta))
+                    tpp = tp_f if self.p.hl_tp_price=='Fixed' else (ta if self.p.hl_tp_price=='ATR' else max(tf, ta))
                     sl_f, sl_a = ep*(1-self.p.sl_hl_per), ep - self.p.hl_sl_atr_mul*self.atr_sl[0]
                     slp = sl_f if self.p.hl_sl_price=='Fixed' else (sl_a if self.p.hl_sl_price=='ATR' else max(sl_f, sl_a))
                 else: tpp, slp = ep*(1+self.p.tp_ll_per), ep*(1-self.p.sl_ll_per)
