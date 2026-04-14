@@ -4,7 +4,7 @@ import numpy as np
 from numba import njit
 import math
 
-# [The Real 100.0% Parity v4.1 - Hotfix] 
+# [The Real 100.0% Parity v4.2 - Scalar Hotfix] 
 # ==========================================
 # [초정밀 엔진] 전처리 및 데이터 로드
 # ==========================================
@@ -124,21 +124,21 @@ hl_p_triggers = (hott_v if hl_price_type == 'H/L OTT' else (bb_u if hl_price_typ
 ll_p_triggers = (ma2 * (1 - ma1 * ll_mult - en_ll_per) if ll_vol_filter else ma2 * (1 - en_ll_per))
 
 # ==========================================
-# [중요: Hotfix v4.1] 커스텀 상태 추적 배열
+# [중요: v4.2] 상태 추적 (인덱싱 오류 수정 완료)
 # ==========================================
-# 🚨 Numba context에 없는 속성 대신 전용 배열을 사용하여 상태 관리
-num_cols = 1 # 심볼 수에 맞게 조정 (여기서는 단일 심볼 가정)
-entry_id_arr = np.zeros(num_cols, dtype=np.int32) 
-entry_price_arr = np.zeros(num_cols, dtype=np.float64)
-entry_size_arr = np.zeros(num_cols, dtype=np.float64)
+num_cols = 1
+id_arr = np.zeros(num_cols, dtype=np.int32) 
+price_arr = np.zeros(num_cols, dtype=np.float64)
+size_arr = np.zeros(num_cols, dtype=np.float64)
 
 @njit
 def order_func_nb(c, o, h, l, cl, hlp_t, llp_t, atp, ats, trm, 
                   inst_num, use_tr, o_m_h, o_m_l, e_m_h, e_m_l, tp_t, sl_t, h_i, 
                   tph, slh, tpl, sll, tpm, slm, slip_ticks, dec, 
-                  id_arr, price_arr, size_arr):
+                  id_a, price_a, size_a):
     
-    i = c.i; col = c.col; pos = c.position_now[col]; cash = c.cash_now[col]
+    # 🚨 [V4.2 핵심 수정] position_now, cash_now는 스칼라이므로 [col] 인덱싱 제거
+    i = c.i; col = c.col; pos = c.position_now; cash = c.cash_now
     if i < 1 + h_i: return vbt.portfolio.nb.order_nothing_nb
     
     def get_qty(val, d): 
@@ -146,40 +146,35 @@ def order_func_nb(c, o, h, l, cl, hlp_t, llp_t, atp, ats, trm,
         return math.floor(val * mult + 0.5) / mult
     tick = 10.0**-dec; slip = slip_ticks * tick
     
-    # 1. 포지션이 없을 때 (진입 평가)
     if pos == 0:
-        id_arr[col] = 0; price_arr[col] = 0.0; size_arr[col] = 0.0 # 상태 초기화
+        id_a[col] = 0; price_a[col] = 0.0; size_a[col] = 0.0
         hlp, llp = hlp_t[i-1-h_i], llp_t[i-1]
         
         t_en_h = (h[i] > hlp) if o_m_h == 'limits' else (cl[i] > hlp)
-        if t_en_h and hlp > 0:
+        if t_en_h and hlp > 0 and not np.isnan(hlp):
             entry_p = (max(o[i], hlp) if o_m_h == 'limits' else cl[i]) + slip
             qty = get_qty(cash / entry_p, dec)
-            id_arr[col] = 1; price_arr[col] = entry_p; size_arr[col] = qty # 상태 기록
+            id_a[col] = 1; price_a[col] = entry_p; size_a[col] = qty
             return vbt.portfolio.nb.order_nb(size=qty, price=entry_p, size_type=vbt.portfolio.nb.SizeType.Amount)
         
         t_en_l = (l[i] < llp) if o_m_l == 'limits' else (cl[i] < llp)
-        if t_en_l and llp > 0:
+        if t_en_l and llp > 0 and not np.isnan(llp):
             entry_p = (min(o[i], llp) if o_m_l == 'limits' else cl[i]) + slip
             qty = get_qty(cash / entry_p, dec)
-            id_arr[col] = 2; price_arr[col] = entry_p; size_arr[col] = qty # 상태 기록
+            id_a[col] = 2; price_a[col] = entry_p; size_a[col] = qty
             return vbt.portfolio.nb.order_nb(size=qty, price=entry_p, size_type=vbt.portfolio.nb.SizeType.Amount)
             
-    # 2. 포지션이 있을 때 (청산 평가)
     if pos > 0:
         if use_tr and cl[i] < trm[i] and cl[i-1] >= trm[i-1]:
             exit_p = cl[i] - slip
             return vbt.portfolio.nb.order_nb(size=-pos, price=exit_p, size_type=vbt.portfolio.nb.SizeType.Amount)
         
-        # [FIX] c.last_pos_price 대신 커스텀 상태 배열 참조 (AttributeError 방지)
-        ep = price_arr[col]
-        cur_state = id_arr[col]
-        
-        if cur_state == 1: # HL 진입 시: ATR 배수 + 퍼센트
+        ep = price_a[col]; cur_state = id_a[col]
+        if cur_state == 1: 
             tf, ta = ep*(1+tph), ep + tpm*atp[i]; tpp = tf if tp_t=='Fixed' else (ta if tp_t=='ATR' else max(tf, ta))
             sf, sa = ep*(1-slh), ep - slm*ats[i]; slp = sf if sl_t=='Fixed' else (sa if sl_t=='ATR' else max(sf, sa))
             exit_mode = e_m_h
-        else: # LL 진입 시: 순수 퍼센트 기반
+        else: 
             tpp, slp = ep*(1+tpl), ep*(1-sll)
             exit_mode = e_m_l
         
@@ -189,9 +184,7 @@ def order_func_nb(c, o, h, l, cl, hlp_t, llp_t, atp, ats, trm,
             if exit_mode == 'limits':
                 if o[i] >= tpp or o[i] <= slp: exit_p = o[i]
             exit_p -= slip
-            
-            # [FIX] c.last_pos_size 대신 size_arr[col] 참조
-            orig_size = size_arr[col]
+            orig_size = size_a[col]
             if inst_num == 2 and pos > get_qty(orig_size * 0.6, dec):
                 return vbt.portfolio.nb.order_nb(size=-get_qty(pos/2, dec), price=exit_p, size_type=vbt.portfolio.nb.SizeType.Amount)
             else:
@@ -199,14 +192,14 @@ def order_func_nb(c, o, h, l, cl, hlp_t, llp_t, atp, ats, trm,
                 
     return vbt.portfolio.nb.order_nothing_nb
 
-# 시뮬레이션 실행 (flexible=True로 동일 봉 다중 주문 허용)
+# 시뮬레이션 실행
 portfolio = vbt.Portfolio.from_order_func(
     data['Close'],
     order_func_nb,
     o_np, h_np, l_np, c_np, hl_p_triggers, ll_p_triggers, atr_tp, atr_sl, tr_ma,
     inst, tr_hl, o_m_hl, o_m_ll, e_m_hl, e_m_ll, tp_hl_type, sl_hl_type, h_int,
     tp_hl_per, sl_hl_per, tp_ll_per, sl_ll_per, hl_tp_atr_mul, hl_sl_atr_mul, slippage_ticks, ex_dec,
-    entry_id_arr, entry_price_arr, entry_size_arr, # 🚨 확장된 상태 배열 전달
+    id_arr, price_arr, size_arr,
     flexible=True,
     init_cash=1000000,
     fees=0.0008,

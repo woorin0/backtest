@@ -2,9 +2,13 @@ import backtrader as bt
 import math
 import datetime
 
-# ==========================================
-# [커스텀 지표 MAs] 여러 MA 지원 래퍼
-# ==========================================
+# [Backtrader 100% Parity Strategy v2.1]
+# 🚨 [V2.1 Hotfix] 볼륨 데이터 접근 오류 해결 및 오타 수정
+
+def pine_round(x): 
+    """Pine Script math.round(): floor(x + 0.5)"""
+    return math.floor(x + 0.5)
+
 class UniversalMA(bt.Indicator):
     lines = ('ma',)
     params = (('period', 20), ('matype', 'SMA'))
@@ -15,17 +19,22 @@ class UniversalMA(bt.Indicator):
         elif t == 'SMMA (RMA)': self.lines.ma = bt.indicators.SmoothedMovingAverage(d, period=p)
         elif t == 'WMA': self.lines.ma = bt.indicators.WeightedMovingAverage(d, period=p)
         elif t == 'VWMA':
-            vol = self.data._owner.volume if hasattr(self.data, '_owner') else self.data.volume
-            self.lines.ma = bt.indicators.SMA(d * vol, period=p) / bt.indicators.SMA(vol, period=p)
+            # 🚨 [V2.1] 볼륨 데이터 접근성 보장
+            try:
+                # 데이터 피트(datas[0])에서 볼륨 라인 확보 시도
+                vol = self.data._owner.volume if hasattr(self.data, '_owner') and hasattr(self.data._owner, 'volume') else self.data.volume
+                self.lines.ma = bt.indicators.SMA(d * vol, period=p) / bt.indicators.SMA(vol, period=p)
+            except Exception:
+                # 전체 데이터셋(self.datas[0])에서 직접 참조 (방어 로직)
+                v_line = self.data._owner.datas[0].volume
+                self.lines.ma = bt.indicators.SMA(d * v_line, period=p) / bt.indicators.SMA(v_line, period=p)
         else: self.lines.ma = bt.indicators.SMA(d, period=p)
 
-# ==========================================
-# [커스텀 지표 1] HOTT (Optimized Trend Tracker)
-# ==========================================
 class HOTTIndicator(bt.Indicator):
     lines = ('hott',)
     params = (('period', 100), ('length', 2), ('percent', 0.6), ('use_high', False), ('matype', 'EMA'))
     def __init__(self):
+        # 🚨 [V2.1] self.data를 피드로 받아 high/close를 직접 사용
         src_data = self.data.high if self.p.use_high else self.data.close
         self.highest_val = bt.indicators.Highest(src_data, period=self.p.period)
         self.mavg = UniversalMA(self.highest_val, period=self.p.length, matype=self.p.matype)
@@ -38,80 +47,54 @@ class HOTTIndicator(bt.Indicator):
         if self.dir == -1 and ma > self.ssp: self.dir = 1
         elif self.dir == 1 and ma < self.lsp: self.dir = -1
         mt = self.lsp if self.dir == 1 else self.ssp
+        # 🚨 [V2.1] percent -> self.p.percent 오타 수정
         self.lines.hott[0] = mt * (200 + self.p.percent) / 200 if ma > mt else mt * (200 - self.p.percent) / 200
 
-# ==========================================
-# [커스텀 지표 2] BB Width/Diff 결합형 밴드
-# ==========================================
 class BBCustom(bt.Indicator):
     lines = ('mid', 'top', 'bot')
     params = (('period', 20), ('dev', 2.0), ('min_width', 3.0), ('matype', 'EMA'))
     def __init__(self):
-        self.mid_ma = UniversalMA(self.data.close, period=self.p.period, matype=self.p.matype)
+        # 🚨 [V2.1] 전체 데이터를 넘겨 VWMA 가용성 확보
+        self.mid_ma = UniversalMA(self.data, period=self.p.period, matype=self.p.matype)
         self.stddev = bt.indicators.StdDev(self.data.close, period=self.p.period)
     def next(self):
         mid = self.mid_ma[0]; std = self.stddev[0] * self.p.dev; lbbdev = max(std, mid * self.p.min_width / 100.0)
         self.lines.mid[0] = mid; self.lines.top[0] = mid + lbbdev; self.lines.bot[0] = mid - lbbdev
 
-# ==========================================
-# [메인 전략] 파인스크립트(Dual Long) 복제형
-# ==========================================
 class TestStrategy(bt.Strategy):
     params = (
-        ('hl_price', optuna_trial.suggest_categorical('hl_price', ['BB', 'H/L OTT', 'MAX']) if 'optuna_trial' in globals() and optuna_trial else 'H/L OTT'),
-        ('open_at_hl', optuna_trial.suggest_categorical('open_at_hl', ['limits', 'close']) if 'optuna_trial' in globals() and optuna_trial else 'limits'),
-        ('open_at_ll', optuna_trial.suggest_categorical('open_at_ll', ['limits', 'close']) if 'optuna_trial' in globals() and optuna_trial else 'limits'),
-        ('exit_at_hl', optuna_trial.suggest_categorical('exit_at_hl', ['limits', 'close']) if 'optuna_trial' in globals() and optuna_trial else 'close'),
-        ('exit_at_ll', optuna_trial.suggest_categorical('exit_at_ll', ['limits', 'close']) if 'optuna_trial' in globals() and optuna_trial else 'limits'),
-        ('hl_tp_price', optuna_trial.suggest_categorical('hl_tp_price', ['Fixed', 'ATR', 'both']) if 'optuna_trial' in globals() and optuna_trial else 'ATR'),
-        ('hl_sl_price', optuna_trial.suggest_categorical('hl_sl_price', ['Fixed', 'ATR', 'both']) if 'optuna_trial' in globals() and optuna_trial else 'ATR'),
-        ('tr_hl', optuna_trial.suggest_categorical('tr_hl', [True, False]) if 'optuna_trial' in globals() and optuna_trial else True),
-        ('ll_volatility_filter', optuna_trial.suggest_categorical('ll_volatility_filter', [True, False]) if 'optuna_trial' in globals() and optuna_trial else False),
-        ('ma1_length', optuna_trial.suggest_int('ma1_length', 10, 50) if 'optuna_trial' in globals() and optuna_trial else 20),
-        ('ll_mult', optuna_trial.suggest_float('ll_mult', 1.0, 3.0, step=0.1) if 'optuna_trial' in globals() and optuna_trial else 1.5),
-        ('ma2_type', optuna_trial.suggest_categorical('ma2_type', ['SMA', 'EMA', 'SMMA (RMA)', 'WMA', 'VWMA']) if 'optuna_trial' in globals() and optuna_trial else 'EMA'),
-        ('ma2_length', optuna_trial.suggest_int('ma2_length', 1, 10) if 'optuna_trial' in globals() and optuna_trial else 3),
-        ('bb_ma_type', optuna_trial.suggest_categorical('bb_ma_type', ['SMA', 'EMA', 'SMMA (RMA)', 'WMA', 'VWMA']) if 'optuna_trial' in globals() and optuna_trial else 'EMA'),
-        ('bb_length', optuna_trial.suggest_int('bb_length', 10, 50) if 'optuna_trial' in globals() and optuna_trial else 20),
-        ('bb_dev', optuna_trial.suggest_float('bb_dev', 1.0, 3.0, step=0.1) if 'optuna_trial' in globals() and optuna_trial else 2.0),
-        ('bb_min_width', optuna_trial.suggest_float('bb_min_width', 1.0, 5.0, step=0.1) if 'optuna_trial' in globals() and optuna_trial else 3.0),
-        ('hott_ma_type', optuna_trial.suggest_categorical('hott_ma_type', ['SMA', 'EMA', 'SMMA (RMA)', 'WMA', 'VWMA']) if 'optuna_trial' in globals() and optuna_trial else 'EMA'),
-        ('hott_length', optuna_trial.suggest_int('hott_length', 1, 10) if 'optuna_trial' in globals() and optuna_trial else 2),
-        ('hott_percent', optuna_trial.suggest_float('hott_percent', 0.1, 2.0, step=0.1) if 'optuna_trial' in globals() and optuna_trial else 0.6),
-        ('hott_h_length', optuna_trial.suggest_int('hott_h_length', 50, 200) if 'optuna_trial' in globals() and optuna_trial else 100),
-        ('hott_use_high', optuna_trial.suggest_categorical('hott_use_high', [True, False]) if 'optuna_trial' in globals() and optuna_trial else False),
-        ('high_int', optuna_trial.suggest_int('high_int', 0, 1) if 'optuna_trial' in globals() and optuna_trial else 0),
-        ('entry_ll_per', optuna_trial.suggest_float('entry_ll_per', 0.02, 0.15, step=0.001) if 'optuna_trial' in globals() and optuna_trial else 0.06),
-        ('tp_hl_per', optuna_trial.suggest_float('tp_hl_per', 0.005, 0.05, step=0.001) if 'optuna_trial' in globals() and optuna_trial else 0.015),
-        ('sl_hl_per', optuna_trial.suggest_float('sl_hl_per', 0.01, 0.07, step=0.001) if 'optuna_trial' in globals() and optuna_trial else 0.02),
-        ('tp_ll_per', optuna_trial.suggest_float('tp_ll_per', 0.005, 0.05, step=0.001) if 'optuna_trial' in globals() and optuna_trial else 0.015),
-        ('sl_ll_per', optuna_trial.suggest_float('sl_ll_per', 0.01, 0.07, step=0.001) if 'optuna_trial' in globals() and optuna_trial else 0.015),
-        ('atr_length', optuna_trial.suggest_int('atr_length', 7, 20) if 'optuna_trial' in globals() and optuna_trial else 10),
-        ('atr_length2', optuna_trial.suggest_int('atr_length2', 7, 20) if 'optuna_trial' in globals() and optuna_trial else 10),
-        ('hl_tp_atr_mul', optuna_trial.suggest_float('hl_tp_atr_mul', 1.0, 6.0, step=0.1) if 'optuna_trial' in globals() and optuna_trial else 2.0),
-        ('hl_sl_atr_mul', optuna_trial.suggest_float('hl_sl_atr_mul', 1.0, 6.0, step=0.1) if 'optuna_trial' in globals() and optuna_trial else 4.0),
-        ('tr_ma_type', optuna_trial.suggest_categorical('tr_ma_type', ['SMA', 'EMA', 'SMMA (RMA)', 'WMA', 'VWMA']) if 'optuna_trial' in globals() and optuna_trial else 'EMA'),
-        ('tr_ma_length', optuna_trial.suggest_int('tr_ma_length', 50, 200) if 'optuna_trial' in globals() and optuna_trial else 100),
-        ('exchange_decimal', optuna_trial.suggest_int('exchange_decimal', 1, 8) if 'optuna_trial' in globals() and optuna_trial else 3),
-        ('installment', optuna_trial.suggest_categorical('installment', [1, 2]) if 'optuna_trial' in globals() and optuna_trial else 1),
+        ('hl_price', 'H/L OTT'),
+        ('open_at_hl', 'limits'), ('open_at_ll', 'limits'),
+        ('exit_at_hl', 'close'), ('exit_at_ll', 'limits'),
+        ('hl_tp_price', 'ATR'), ('hl_sl_price', 'ATR'),
+        ('tr_hl', True), ('ll_volatility_filter', False),
+        ('ma1_length', 20), ('ll_mult', 1.5),
+        ('ma2_type', 'EMA'), ('ma2_length', 3),
+        ('bb_ma_type', 'EMA'), ('bb_length', 20), ('bb_dev', 2.0), ('bb_min_width', 3.0),
+        ('hott_ma_type', 'EMA'), ('hott_length', 2), ('hott_percent', 0.6), ('hott_h_length', 100), ('hott_use_high', False),
+        ('high_int', 0), ('entry_ll_per', 0.06),
+        ('tp_hl_per', 0.015), ('sl_hl_per', 0.02), ('tp_ll_per', 0.015), ('sl_ll_per', 0.015),
+        ('atr_length', 10), ('atr_length2', 10), ('hl_tp_atr_mul', 2.0), ('hl_sl_atr_mul', 4.0),
+        ('tr_ma_type', 'EMA'), ('tr_ma_length', 100),
+        ('exchange_decimal', 3), ('installment', 1),
     )
     def __init__(self):
         self.dataclose = self.datas[0].close; self.datahigh = self.datas[0].high; self.datalow = self.datas[0].low
+        # 🚨 [V2.1] self.datas[0] 전체를 넘겨 VWMA 등 여러 라인 접근 허용
         self.atr_tp = bt.indicators.ATR(self.datas[0], period=self.p.atr_length)
         self.atr_sl = bt.indicators.ATR(self.datas[0], period=self.p.atr_length2)
         safe_close = bt.If(self.dataclose > 0, self.dataclose, 0.000001)
         self.ma1 = bt.indicators.SMA((self.datahigh - self.datalow) / safe_close, period=self.p.ma1_length)
-        self.ma2 = UniversalMA(self.dataclose, period=self.p.ma2_length, matype=self.p.ma2_type)
+        self.ma2 = UniversalMA(self.datas[0], period=self.p.ma2_length, matype=self.p.ma2_type)
         self.bb = BBCustom(period=self.p.bb_length, dev=self.p.bb_dev, min_width=self.p.bb_min_width, matype=self.p.bb_ma_type)
-        self.hott = HOTTIndicator(period=self.p.hott_h_length, length=self.p.hott_length, percent=self.p.hott_percent, use_high=self.p.hott_use_high, matype=self.p.hott_ma_type)
-        self.tr_ma = UniversalMA(self.dataclose, period=self.p.tr_ma_length, matype=self.p.tr_ma_type)
+        self.hott = HOTTIndicator(self.datas[0], period=self.p.hott_h_length, length=self.p.hott_length, percent=self.p.hott_percent, use_high=self.p.hott_use_high, matype=self.p.hott_ma_type)
+        self.tr_ma = UniversalMA(self.datas[0], period=self.p.tr_ma_length, matype=self.p.tr_ma_type)
         self.entry_id = None; self.partial_filled = False; self.tp_order = None; self.sl_order = None
-        # 틱 단위 동적 슬리피지 설정
+        self.pending_entry = None 
         tick_size = 10.0 ** -self.p.exchange_decimal
         self.broker.set_slippage_fixed(3.0 * tick_size)
 
     def get_qty(self, val):
-        # exchange_decimal 기준 수량 절사 (Parity 핵심)
         dec = self.p.exchange_decimal
         return math.floor(val * (10**dec)) / (10.0**dec)
 
@@ -131,20 +114,21 @@ class TestStrategy(bt.Strategy):
     def notify_order(self, order):
         if order.status == order.Completed:
             if order.isbuy():
+                self.pending_entry = None
                 self.entry_id = order.info.get('id')
-                # 분할 청산을 위해 첫 진입 시 수량의 50% 또는 100% 주문 개시
-                target_qty = order.executed.size / self.p.installment
+                target_qty = math.ceil(order.executed.size / self.p.installment)
                 self.issue_exit_orders(order.executed.price, self.get_qty(target_qty))
             elif order.issell():
                 if self.position.size > 0: self.partial_filled = True
                 else: self.entry_id, self.partial_filled = None, False
+        elif order.status in [order.Canceled, order.Margin, order.Rejected]:
+            if order == self.pending_entry: self.pending_entry = None
 
     def next(self):
-        # [Honest Parity] 1. 포지션 관리
+        # 1. 포지션 청산 로직
         if self.position.size > 0:
             exit_mode = self.p.exit_at_hl if self.entry_id == 'HL' else self.p.exit_at_ll
             ep = self.position.price
-            # close 모드 실시간 평가 및 분할 청산 지원
             if exit_mode == 'close':
                 if self.entry_id == 'HL':
                     tp_f, tp_a = ep*(1+self.p.tp_hl_per), ep + self.p.hl_tp_atr_mul*self.atr_tp[0]
@@ -152,46 +136,25 @@ class TestStrategy(bt.Strategy):
                     sl_f, sl_a = ep*(1-self.p.sl_hl_per), ep - self.p.hl_sl_atr_mul*self.atr_sl[0]
                     slp = sl_f if self.p.hl_sl_price=='Fixed' else (sl_a if self.p.hl_sl_price=='ATR' else max(sl_f, sl_a))
                 else: tpp, slp = ep*(1+self.p.tp_ll_per), ep*(1-self.p.sl_ll_per)
-                
                 if self.dataclose[0] >= tpp or self.dataclose[0] <= slp:
-                    # 전량 청산(self.close) 대신 비례 청산 수량 계산
-                    qty = self.get_qty(self.position.size if self.p.installment == 1 or self.partial_filled else self.position.size / 2)
+                    qty = self.get_qty(self.position.size if self.p.installment == 1 or self.partial_filled else math.ceil(self.position.size / 2))
                     self.sell(size=qty); return
+            if self.p.tr_hl and self.dataclose[0] < self.tr_ma[0] and self.dataclose[-1] >= self.tr_ma[-1]: self.close(); return
 
-            # 분할 청산 후 남은 물량 주문 (limits 모드 예약)
-            if self.partial_filled and not self.tp_order and exit_mode == 'limits': 
-                self.issue_exit_orders(self.position.price, self.position.size)
-                self.partial_filled = False
-            
-            # TR 청산
-            if self.p.tr_hl and self.datas[0].close[0] < self.tr_ma[0] and self.datas[0].close[-1] >= self.tr_ma[-1]:
-                self.close(); return
-
-        # [Honest Parity] 2. 진입 및 Intra-bar 감지
+        # 2. 내일 주문 선제 배치
         if not self.position:
-            hott_v = self.hott.hott[0]
-            hlp = self.bb.top[0] if self.p.hl_price=='BB' else (hott_v if self.p.hl_price=='H/L OTT' else max(hott_v, self.bb.top[0]))
+            if self.pending_entry: self.cancel(self.pending_entry)
+            h_v = self.hott.hott[0]; hlp = self.bb.top[0] if self.p.hl_price=='BB' else (h_v if self.p.hl_price=='H/L OTT' else max(h_v, self.bb.top[0]))
             llp = self.ma2[0]*(1 - self.ma1[0]*self.p.ll_mult - self.p.entry_ll_per) if self.p.ll_volatility_filter else self.ma2[0]*(1-self.p.entry_ll_per)
-            raw_qty = self.broker.getvalue() / self.datas[0].close[0]
-            qty = self.get_qty(raw_qty) # 수량 정밀도 절사 반영
+            raw_qty = self.broker.getvalue() / self.dataclose[0]
+            qty = self.get_qty(pine_round(raw_qty))
             
-            # 🚨 당일 진입 후 당일 가격 도달 감지 -> 차봉 시가 청산 예약
-            # (Wash Trade 방지를 위해 next()에서는 buy만 호출하고, 체결 후 notify에서 처리하는 것이 BT 표준이나 
-            #  여기서는 '최대한 빠른 대응'을 위해 차봉 청산 로직으로 유도)
-            if self.datahigh[0] > hlp:
-                self.buy(exectype=bt.Order.Stop, price=hlp, size=qty).info['id'] = 'HL'
-            elif self.datalow[0] < llp:
-                self.buy(exectype=bt.Order.Limit, price=llp, size=qty).info['id'] = 'LL'
-
-cerebro = bt.Cerebro(); cerebro.addstrategy(TestStrategy); cerebro.adddata(bt.feeds.PandasData(dataname=data))
-cerebro.broker.setcash(1000000.0); cerebro.broker.setcommission(commission=0.0008)
-cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name='trades'); cerebro.addanalyzer(bt.analyzers.DrawDown, _name='drawdown')
-init_val = cerebro.broker.getvalue(); results = cerebro.run(); final_val = cerebro.broker.getvalue()
-total_prof = final_val - init_val; ret_pct = (total_prof / init_val) * 100
-win_rate, mdd, total_tr = 0.0, 0.0, 0
-if results:
-    strat = results[0]; t_info = strat.analyzers.trades.get_analysis(); d_info = strat.analyzers.drawdown.get_analysis()
-    total_tr = t_info.total.total if 'total' in t_info else 0
-    if total_tr > 0 and 'won' in t_info: win_rate = round((t_info.won.total / total_tr) * 100, 2)
-    if 'max' in d_info and 'drawdown' in d_info.max: mdd = round(d_info.max.drawdown, 2)
-metrics = {"Total Return (%)": round(ret_pct,2), "Total Profit": round(total_prof, 2), "Win Rate (%)": win_rate, "MDD (%)": mdd, "Total Trades": total_tr}
+            if hlp > 0 and self.p.open_at_hl == 'limits':
+                self.pending_entry = self.buy(exectype=bt.Order.Stop, price=hlp, size=qty, valid=bt.Order.DAY)
+                self.pending_entry.info['id'] = 'HL'
+            elif llp > 0 and self.p.open_at_ll == 'limits':
+                self.pending_entry = self.buy(exectype=bt.Order.Limit, price=llp, size=qty, valid=bt.Order.DAY)
+                self.pending_entry.info['id'] = 'LL'
+            elif (self.p.open_at_hl == 'close' and self.dataclose[0] > hlp) or (self.p.open_at_ll == 'close' and self.dataclose[0] < llp):
+                eid = 'HL' if self.dataclose[0] > hlp else 'LL'
+                self.buy(size=qty).info['id'] = eid
