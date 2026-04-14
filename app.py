@@ -47,6 +47,14 @@ with st.sidebar:
     trials = st.number_input("탐색수", 10, 10000, 100)
     workers = st.number_input("워커 수 (병렬 엔진)", 2, 8, 4)
     
+    st.markdown("---")
+    st.markdown("📅 **백테스트 기간 설정**")
+    d_col1, d_col2 = st.columns(2)
+    with d_col1:
+        date_start = st.date_input("시작일", datetime.date(2023, 1, 1))
+    with d_col2:
+        date_end = st.date_input("종료일", datetime.date.today())
+    
     # 엔진 변경 시 코드 자동 리로드 (캐시 무시하고 파일에서 직독)
     # 엔진 변경 시 코드 자동 리로드 (캐시 무시하고 파일에서 직독)
     # 엔진 변경 시 코드 자동 리로드 (로컬/서버 공용 상대 경로 시스템)
@@ -137,9 +145,9 @@ if os.path.exists(CACHE_FILE):
 
 if btn_start and not active_task:
     from core.data_fetcher import fetch_candles, get_cache_path
-    data = fetch_candles("Binance", sym, tf, datetime.date(2022,1,1), datetime.date.today(), 1000)
+    data = fetch_candles("Binance", sym, tf, date_start, date_end, 1000)
     if data is not None and not data.empty:
-        dp = get_cache_path("Binance", sym, tf, datetime.date(2022,1,1), datetime.date.today())
+        dp = get_cache_path("Binance", sym, tf, date_start, date_end)
         sn = f"study_{int(time.time())}"
         # 워커 시그니처 및 ID 사전 생성 (상태 추적용)
         worker_sigs = []

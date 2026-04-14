@@ -125,41 +125,41 @@ hl_p_triggers = (hott_v if hl_price_type == 'H/L OTT' else (bb_u if hl_price_typ
 ll_p_triggers = (ma2 * (1 - ma1 * ll_mult - en_ll_per) if ll_vol_filter else ma2 * (1 - en_ll_per))
 
 # ==========================================
-# [중요: 100% Parity] 저수준 주문 함수 (Order Func)
+# [중요: Hotfix v4.1] 커스텀 상태 추적 배열
 # ==========================================
-entry_state = np.zeros(1, dtype=np.int32) 
+num_cols = 1 
+id_arr = np.zeros(num_cols, dtype=np.int32) 
+price_arr = np.zeros(num_cols, dtype=np.float64)
+size_arr = np.zeros(num_cols, dtype=np.float64)
 
 @njit
 def order_func_nb(c, o, h, l, cl, hlp_t, llp_t, atp, ats, trm, 
                   inst_num, use_tr, o_m_h, o_m_l, e_m_h, e_m_l, tp_t, sl_t, h_i, 
-                  tph, slh, tpl, sll, tpm, slm, slip_ticks, dec, state_arr):
+                  tph, slh, tpl, sll, tpm, slm, slip_ticks, dec, 
+                  id_a, price_a, size_a):
     
-    i = c.i; col = c.col
+    i = c.i; col = c.col; pos = c.position_now[col]; cash = c.cash_now[col]
     if i < 1 + h_i: return vbt.portfolio.nb.order_nothing_nb
-    
-    pos = c.position[col]
-    cash = c.cash[col]
     
     def get_qty(val, d): 
         mult = 10.0**d
         return math.floor(val * mult + 0.5) / mult
-    
     tick = 10.0**-dec; slip = slip_ticks * tick
     
     if pos == 0:
+        id_a[col] = 0; price_a[col] = 0.0; size_a[col] = 0.0
         hlp, llp = hlp_t[i-1-h_i], llp_t[i-1]
         t_en_h = (h[i] > hlp) if o_m_h == 'limits' else (cl[i] > hlp)
         if t_en_h and hlp > 0:
             entry_p = (max(o[i], hlp) if o_m_h == 'limits' else cl[i]) + slip
             qty = get_qty(cash / entry_p, dec)
-            state_arr[col] = 1 
+            id_a[col] = 1; price_a[col] = entry_p; size_a[col] = qty
             return vbt.portfolio.nb.order_nb(size=qty, price=entry_p, size_type=vbt.portfolio.nb.SizeType.Amount)
-        
         t_en_l = (l[i] < llp) if o_m_l == 'limits' else (cl[i] < llp)
         if t_en_l and llp > 0:
             entry_p = (min(o[i], llp) if o_m_l == 'limits' else cl[i]) + slip
             qty = get_qty(cash / entry_p, dec)
-            state_arr[col] = 2 
+            id_a[col] = 2; price_a[col] = entry_p; size_a[col] = qty
             return vbt.portfolio.nb.order_nb(size=qty, price=entry_p, size_type=vbt.portfolio.nb.SizeType.Amount)
             
     if pos > 0:
@@ -167,8 +167,7 @@ def order_func_nb(c, o, h, l, cl, hlp_t, llp_t, atp, ats, trm,
             exit_p = cl[i] - slip
             return vbt.portfolio.nb.order_nb(size=-pos, price=exit_p, size_type=vbt.portfolio.nb.SizeType.Amount)
         
-        ep = c.last_pos_price[col]
-        cur_state = state_arr[col]
+        ep = price_a[col]; cur_state = id_a[col]
         if cur_state == 1: 
             tf, ta = ep*(1+tph), ep + tpm*atp[i]; tpp = tf if tp_t=='Fixed' else (ta if tp_t=='ATR' else max(tf, ta))
             sf, sa = ep*(1-slh), ep - slm*ats[i]; slp = sf if sl_t=='Fixed' else (sa if sl_t=='ATR' else max(sf, sa))
@@ -183,7 +182,8 @@ def order_func_nb(c, o, h, l, cl, hlp_t, llp_t, atp, ats, trm,
             if exit_mode == 'limits':
                 if o[i] >= tpp or o[i] <= slp: exit_p = o[i]
             exit_p -= slip
-            if inst_num == 2 and pos > get_qty(c.last_pos_size[col]*0.6, dec):
+            orig_size = size_a[col]
+            if inst_num == 2 and pos > get_qty(orig_size * 0.6, dec):
                 return vbt.portfolio.nb.order_nb(size=-get_qty(pos/2, dec), price=exit_p, size_type=vbt.portfolio.nb.SizeType.Amount)
             else:
                 return vbt.portfolio.nb.order_nb(size=-pos, price=exit_p, size_type=vbt.portfolio.nb.SizeType.Amount)
@@ -197,7 +197,7 @@ portfolio = vbt.Portfolio.from_order_func(
     o_np, h_np, l_np, c_np, hl_p_triggers, ll_p_triggers, atr_tp, atr_sl, tr_ma,
     inst, tr_hl, o_m_hl, o_m_ll, e_m_hl, e_m_ll, tp_hl_type, sl_hl_type, h_int,
     tp_hl_per, sl_hl_per, tp_ll_per, sl_ll_per, hl_tp_atr_mul, hl_sl_atr_mul, slippage_ticks, ex_dec,
-    entry_state, 
+    id_arr, price_arr, size_arr,
     flexible=True,
     init_cash=1000000,
     fees=0.0008,
@@ -346,7 +346,7 @@ class TestStrategy(bt.Strategy):
             if exit_mode == 'close':
                 if self.entry_id == 'HL':
                     tp_f, tp_a = ep*(1+self.p.tp_hl_per), ep + self.p.hl_tp_atr_mul*self.atr_tp[0]
-                    tpp = tp_f if self.p.hl_tp_price=='Fixed' else (ta if self.p.hl_tp_price=='ATR' else max(tf, ta))
+                    tpp = tp_f if self.p.hl_tp_price=='Fixed' else (tp_a if self.p.hl_tp_price=='ATR' else max(tp_f, tp_a))
                     sl_f, sl_a = ep*(1-self.p.sl_hl_per), ep - self.p.hl_sl_atr_mul*self.atr_sl[0]
                     slp = sl_f if self.p.hl_sl_price=='Fixed' else (sl_a if self.p.hl_sl_price=='ATR' else max(sl_f, sl_a))
                 else: tpp, slp = ep*(1+self.p.tp_ll_per), ep*(1-self.p.sl_ll_per)

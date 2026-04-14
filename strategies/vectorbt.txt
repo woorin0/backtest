@@ -4,7 +4,7 @@ import numpy as np
 from numba import njit
 import math
 
-# [The Real 100.0% Parity v4] 
+# [The Real 100.0% Parity v4.1 - Hotfix] 
 # ==========================================
 # [초정밀 엔진] 전처리 및 데이터 로드
 # ==========================================
@@ -92,7 +92,6 @@ def calc_ma_vbt(s, v, l, t):
     return n_sma(s.values, l)
 
 bb_mid = calc_ma_vbt(data['Close'], data['Volume'] if 'Volume' in data.columns else None, bb_len, bb_ma_type)
-# [FIX] ddof=0 적용 (모집단 표준편차)
 bb_std = data['Close'].rolling(bb_len).std(ddof=0).values
 bb_dev = np.maximum(bb_std * bb_dev_in, bb_mid * bb_min_w / 100.0)
 bb_u = bb_mid + bb_dev
@@ -125,79 +124,75 @@ hl_p_triggers = (hott_v if hl_price_type == 'H/L OTT' else (bb_u if hl_price_typ
 ll_p_triggers = (ma2 * (1 - ma1 * ll_mult - en_ll_per) if ll_vol_filter else ma2 * (1 - en_ll_per))
 
 # ==========================================
-# [중요: 100% Parity] 저수준 주문 함수 (Order Func)
+# [중요: Hotfix v4.1] 커스텀 상태 추적 배열
 # ==========================================
-# 상태 추적용 배열 (HL/LL 진입 구분)
-entry_state = np.zeros(1, dtype=np.int32) 
+# 🚨 Numba context에 없는 속성 대신 전용 배열을 사용하여 상태 관리
+num_cols = 1 # 심볼 수에 맞게 조정 (여기서는 단일 심볼 가정)
+entry_id_arr = np.zeros(num_cols, dtype=np.int32) 
+entry_price_arr = np.zeros(num_cols, dtype=np.float64)
+entry_size_arr = np.zeros(num_cols, dtype=np.float64)
 
 @njit
 def order_func_nb(c, o, h, l, cl, hlp_t, llp_t, atp, ats, trm, 
                   inst_num, use_tr, o_m_h, o_m_l, e_m_h, e_m_l, tp_t, sl_t, h_i, 
-                  tph, slh, tpl, sll, tpm, slm, slip_ticks, dec, state_arr):
+                  tph, slh, tpl, sll, tpm, slm, slip_ticks, dec, 
+                  id_arr, price_arr, size_arr):
     
-    i = c.i; col = c.col
+    i = c.i; col = c.col; pos = c.position_now[col]; cash = c.cash_now[col]
     if i < 1 + h_i: return vbt.portfolio.nb.order_nothing_nb
     
-    pos = c.position[col]
-    cash = c.cash[col]
-    
-    # [FIX] math.round 동기화 (0.5 올림)
     def get_qty(val, d): 
         mult = 10.0**d
         return math.floor(val * mult + 0.5) / mult
-    
     tick = 10.0**-dec; slip = slip_ticks * tick
     
     # 1. 포지션이 없을 때 (진입 평가)
     if pos == 0:
+        id_arr[col] = 0; price_arr[col] = 0.0; size_arr[col] = 0.0 # 상태 초기화
         hlp, llp = hlp_t[i-1-h_i], llp_t[i-1]
         
-        # HL 진입 평가
         t_en_h = (h[i] > hlp) if o_m_h == 'limits' else (cl[i] > hlp)
         if t_en_h and hlp > 0:
             entry_p = (max(o[i], hlp) if o_m_h == 'limits' else cl[i]) + slip
             qty = get_qty(cash / entry_p, dec)
-            state_arr[col] = 1 # HL 진입 상태 기록
+            id_arr[col] = 1; price_arr[col] = entry_p; size_arr[col] = qty # 상태 기록
             return vbt.portfolio.nb.order_nb(size=qty, price=entry_p, size_type=vbt.portfolio.nb.SizeType.Amount)
         
-        # LL 진입 평가
         t_en_l = (l[i] < llp) if o_m_l == 'limits' else (cl[i] < llp)
         if t_en_l and llp > 0:
             entry_p = (min(o[i], llp) if o_m_l == 'limits' else cl[i]) + slip
             qty = get_qty(cash / entry_p, dec)
-            state_arr[col] = 2 # LL 진입 상태 기록
+            id_arr[col] = 2; price_arr[col] = entry_p; size_arr[col] = qty # 상태 기록
             return vbt.portfolio.nb.order_nb(size=qty, price=entry_p, size_type=vbt.portfolio.nb.SizeType.Amount)
             
     # 2. 포지션이 있을 때 (청산 평가)
     if pos > 0:
-        # 트레일링/추세 반전 청산 (가장 먼저)
         if use_tr and cl[i] < trm[i] and cl[i-1] >= trm[i-1]:
             exit_p = cl[i] - slip
             return vbt.portfolio.nb.order_nb(size=-pos, price=exit_p, size_type=vbt.portfolio.nb.SizeType.Amount)
         
-        # 진입 당시 조건별 청산식 분리 (State Tracking)
-        ep = c.last_pos_price[col]
-        cur_state = state_arr[col]
+        # [FIX] c.last_pos_price 대신 커스텀 상태 배열 참조 (AttributeError 방지)
+        ep = price_arr[col]
+        cur_state = id_arr[col]
         
         if cur_state == 1: # HL 진입 시: ATR 배수 + 퍼센트
             tf, ta = ep*(1+tph), ep + tpm*atp[i]; tpp = tf if tp_t=='Fixed' else (ta if tp_t=='ATR' else max(tf, ta))
             sf, sa = ep*(1-slh), ep - slm*ats[i]; slp = sf if sl_t=='Fixed' else (sa if sl_t=='ATR' else max(sf, sa))
             exit_mode = e_m_h
-        else: # LL 진입 시: 순수 퍼센트 기반 (파인스크립트 공식)
+        else: # LL 진입 시: 순수 퍼센트 기반
             tpp, slp = ep*(1+tpl), ep*(1-sll)
             exit_mode = e_m_l
         
-        # 청산 신호 평가 (Gap 보정 포함)
         is_hit = (h[i] >= tpp or l[i] <= slp) if exit_mode == 'limits' else (cl[i] >= tpp or cl[i] <= slp)
         if is_hit:
             exit_p = (tpp if h[i] >= tpp else slp) if exit_mode == 'limits' else cl[i]
-            # Gap 보정 (시가가 이미 범위를 벗어남)
             if exit_mode == 'limits':
                 if o[i] >= tpp or o[i] <= slp: exit_p = o[i]
             exit_p -= slip
             
-            # 분할 청산 처리 (last_pos_size 기준)
-            if inst_num == 2 and pos > get_qty(c.last_pos_size[col]*0.6, dec):
+            # [FIX] c.last_pos_size 대신 size_arr[col] 참조
+            orig_size = size_arr[col]
+            if inst_num == 2 and pos > get_qty(orig_size * 0.6, dec):
                 return vbt.portfolio.nb.order_nb(size=-get_qty(pos/2, dec), price=exit_p, size_type=vbt.portfolio.nb.SizeType.Amount)
             else:
                 return vbt.portfolio.nb.order_nb(size=-pos, price=exit_p, size_type=vbt.portfolio.nb.SizeType.Amount)
@@ -211,7 +206,7 @@ portfolio = vbt.Portfolio.from_order_func(
     o_np, h_np, l_np, c_np, hl_p_triggers, ll_p_triggers, atr_tp, atr_sl, tr_ma,
     inst, tr_hl, o_m_hl, o_m_ll, e_m_hl, e_m_ll, tp_hl_type, sl_hl_type, h_int,
     tp_hl_per, sl_hl_per, tp_ll_per, sl_ll_per, hl_tp_atr_mul, hl_sl_atr_mul, slippage_ticks, ex_dec,
-    entry_state, 
+    entry_id_arr, entry_price_arr, entry_size_arr, # 🚨 확장된 상태 배열 전달
     flexible=True,
     init_cash=1000000,
     fees=0.0008,
