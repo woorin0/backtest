@@ -1,4 +1,4 @@
-# [The Real 100.0% Parity v4.6] 전략 템플릿 마스터 (Universal Fix)
+# [The Real 100.0% Parity v4.7] 전략 템플릿 마스터 (Final Hardened Fix)
 
 VECTORBT_STRATEGY = """import vectorbt as vbt
 import pandas as pd
@@ -71,10 +71,10 @@ def calc_ma_vbt(s, v, l, t):
     elif t == 'VWMA': return n_vwma(s.values, v.values if v is not None else np.ones(len(s)), l)
     return n_sma(s.values, l)
 
-# [데이터 및 지표 로드]
+# [데이터 로드]
 c_np, h_np, l_np, o_np = data['Close'].values, data['High'].values, data['Low'].values, data['Open'].values
 
-# 파라미터 로드
+# 파라미터 로드 (Optuna 대응)
 if 'optuna_trial' in globals() and optuna_trial:
     hl_price_type = optuna_trial.suggest_categorical('hl_price', ['BB', 'H/L OTT', 'MAX'])
     bb_ma_type, bb_len = optuna_trial.suggest_categorical('bb_ma_type', ['SMA', 'EMA', 'SMMA (RMA)', 'WMA', 'VWMA']), optuna_trial.suggest_int('bb_length', 10, 50)
@@ -153,10 +153,10 @@ def order_func_nb(c, o, h, l, cl, hlp_t, llp_t, atp, ats, trm,
                   id_a, price_a, size_a):
     
     i = c.i; col = c.col
-    # 🚨 [V4.6] JIT 안정성 필드명 피격: last_position/last_cash 사용
-    pos = c.last_position; cash = c.last_cash
+    # 🚨 [V4.7] 정확한 속성명 사용 (AttributeError 방지)
+    pos = c.position_now; cash = c.cash_now
     
-    tick = 10.0**-dec; slip = slip_ticks * tick
+    p10 = 10.0**dec; tick = 1.0/p10; slip = slip_ticks * tick
     
     idx_h = i - 1 - h_i
     if idx_h < 0: return vbt.portfolio.nb.order_nothing_nb
@@ -167,14 +167,14 @@ def order_func_nb(c, o, h, l, cl, hlp_t, llp_t, atp, ats, trm,
         if not np.isnan(hlp) and hlp > 0:
             if (h[i] > hlp if o_m_h == 'limits' else cl[i] > hlp):
                 ep = (max(o[i], hlp) if o_m_h == 'limits' else cl[i]) + slip
-                qty = np.floor((cash / ep) * 10.0**dec + 0.5) / 10.0**dec
+                qty = np.floor((cash / ep) * p10 + 0.5) / p10
                 if qty > 0:
                     id_a[col] = 1; price_a[col] = ep; size_a[col] = qty
                     return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=vbt.portfolio.nb.SizeType.Amount)
         if not np.isnan(llp) and llp > 0:
             if (l[i] < llp if o_m_l == 'limits' else cl[i] < llp):
                 ep = (min(o[i], llp) if o_m_l == 'limits' else cl[i]) + slip
-                qty = np.floor((cash / ep) * 10.0**dec + 0.5) / 10.0**dec
+                qty = np.floor((cash / ep) * p10 + 0.5) / p10
                 if qty > 0:
                     id_a[col] = 2; price_a[col] = ep; size_a[col] = qty
                     return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=vbt.portfolio.nb.SizeType.Amount)
@@ -197,14 +197,13 @@ def order_func_nb(c, o, h, l, cl, hlp_t, llp_t, atp, ats, trm,
             exit_p = (tpp if h[i] >= tpp else slp) if exit_mode == 'limits' else cl[i]
             if exit_mode == 'limits' and (o[i] >= tpp or o[i] <= slp): exit_p = o[i]
             exit_p -= slip
-            cur_qty = pos; target_dec = 10.0**dec
-            if inst == 2 and pos > (np.floor((size_a[col] * 0.6) * target_dec + 0.5) / target_dec):
-                return vbt.portfolio.nb.order_nb(size=-(np.floor((pos/2) * target_dec + 0.5) / target_dec), price=exit_p, size_type=vbt.portfolio.nb.SizeType.Amount)
+            if inst_num == 2 and pos > (np.floor((size_a[col] * 0.6) * p10 + 0.5) / p10):
+                return vbt.portfolio.nb.order_nb(size=-(np.floor((pos/2) * p10 + 0.5) / p10), price=exit_p, size_type=vbt.portfolio.nb.SizeType.Amount)
             else:
                 return vbt.portfolio.nb.order_nb(size=-pos, price=exit_p, size_type=vbt.portfolio.nb.SizeType.Amount)
     return vbt.portfolio.nb.order_nothing_nb
 
-# 시뮬레이션 (Standard Mode + Stability Fix)
+# 시뮬레이션
 portfolio = vbt.Portfolio.from_order_func(
     data['Close'], order_func_nb,
     o_np, h_np, l_np, c_np, hl_p_triggers, ll_p_triggers, atr_tp, atr_sl, tr_ma,
@@ -260,8 +259,10 @@ class HOTTIndicator(bt.Indicator):
         if math.isnan(ma): return
         fk = ma * self.p.percent * 0.01; ls, ss = ma - fk, ma + fk
         if not hasattr(self, 'lsp'): self.lsp, self.ssp, self.dir = ls, ss, 1
-        if ma > self.lsp: self.lsp = max(ls, self.lsp)
-        if ma < self.ssp: self.ssp = min(ss, self.ssp)
+        mask = (ma > self.lsp)
+        if mask: self.lsp = max(ls, self.lsp)
+        mask_s = (ma < self.ssp)
+        if mask_s: self.ssp = min(ss, self.ssp)
         if self.dir == -1 and ma > self.ssp: self.dir = 1
         elif self.dir == 1 and ma < self.lsp: self.dir = -1
         mt = self.lsp if self.dir == 1 else self.ssp
@@ -354,7 +355,10 @@ class TestStrategy(bt.Strategy):
         if order.status == order.Completed:
             if order.isbuy():
                 self.pending_entry = None; self.entry_id = order.info.get('id')
-                q = math.ceil(order.executed.size / self.p.installment)
+                # 🚨 [V4.7] 분할 매도 시 수량 올림 버그 해결
+                pow10 = 10 ** self.p.exchange_decimal
+                raw_q = order.executed.size / self.p.installment
+                q = math.ceil(raw_q * pow10) / pow10
                 self.issue_exit_orders(order.executed.price, self.get_qty(q))
             elif order.issell():
                 if self.position.size > 0: self.partial_filled = True
@@ -375,7 +379,9 @@ class TestStrategy(bt.Strategy):
                     slp = sf if self.p.hl_sl_price=='Fixed' else (sa if self.p.hl_sl_price=='ATR' else max(sf, sa))
                 else: tpp, slp = ep*(1+self.p.tp_ll_per), ep*(1-self.p.sl_ll_per)
                 if not math.isnan(tpp) and (cur_cl >= tpp or cur_cl <= slp):
-                    q = self.get_qty(self.position.size if self.p.installment == 1 or self.partial_filled else math.ceil(self.position.size / 2))
+                    pow10 = 10 ** self.p.exchange_decimal
+                    raw_p = self.position.size if self.p.installment == 1 or self.partial_filled else math.ceil((self.position.size / 2)*pow10)/pow10
+                    q = self.get_qty(raw_p)
                     self.sell(size=q); return
             if self.p.tr_hl and not math.isnan(self.tr_ma[0]) and cur_cl < self.tr_ma[0] and self.dataclose[-1] >= self.tr_ma[-1]: self.close(); return
         if not self.position:
@@ -383,27 +389,30 @@ class TestStrategy(bt.Strategy):
             h_v = self.hott.hott[0]; hlp = self.bb.top[0] if self.p.hl_price=='BB' else (h_v if self.p.hl_price=='H/L OTT' else max(h_v, self.bb.top[0]))
             llp = self.ma2[0]*(1 - self.ma1[0]*self.p.ll_mult - self.p.entry_ll_per) if self.p.ll_volatility_filter else self.ma2[0]*(1-self.p.entry_ll_per)
             if math.isnan(hlp) or math.isnan(llp): return
-            q = self.get_qty(pine_round(self.broker.getvalue() / cur_cl))
             
-            # 🚨 [V4.5] Stop 주문 가격 보호 (현재가와 역전 방지)
+            # 🚨 [V4.7] 비트코인 수량 증발 방지 로직 적용
+            pow10 = 10 ** self.p.exchange_decimal
+            q = self.get_qty(pine_round((self.broker.getvalue() / cur_cl) * pow10) / pow10)
+            
             if hlp > 0 and self.p.open_at_hl == 'limits':
                 adj_hlp = max(hlp, cur_cl * 1.0001)
-                o = self.buy(exectype=bt.Order.Stop, price=adj_hlp, size=q, valid=bt.Order.DAY)
+                # 🚨 [V4.7] 존재하지 않는 상수 bt.Order.DAY 삭제
+                o = self.buy(exectype=bt.Order.Stop, price=adj_hlp, size=q)
                 if o: o.info['id'] = 'HL'; self.pending_entry = o
             elif llp > 0 and self.p.open_at_ll == 'limits':
                 adj_llp = min(llp, cur_cl * 0.9999)
-                o = self.buy(exectype=bt.Order.Limit, price=adj_llp, size=q, valid=bt.Order.DAY)
+                o = self.buy(exectype=bt.Order.Limit, price=adj_llp, size=q)
                 if o: o.info['id'] = 'LL'; self.pending_entry = o
             elif (self.p.open_at_hl == 'close' and cur_cl > hlp) or (self.p.open_at_ll == 'close' and cur_cl < llp):
                 eid = 'HL' if cur_cl > hlp else 'LL'
                 o = self.buy(size=q)
                 if o: o.info['id'] = eid
 
-# 시뮬레이션 및 데이터 출력
 cerebro = bt.Cerebro(); cerebro.addstrategy(TestStrategy); cerebro.adddata(bt.feeds.PandasData(dataname=data))
 cerebro.broker.setcash(1000000.0); cerebro.broker.setcommission(commission=0.0008)
 cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name='trades'); cerebro.addanalyzer(bt.analyzers.DrawDown, _name='drawdown')
-init_val = cerebro.broker.getvalue(); results = cerebro.run(); final_val = cerebro.broker.getvalue(); total_prof = final_val - init_val; ret_pct = (total_prof / init_val) * 100
+results = cerebro.run()
+init_val = 1000000.0; final_val = cerebro.broker.getvalue(); total_prof = final_val - init_val; ret_pct = (total_prof / init_val) * 100
 win_rate, mdd, total_tr = 0.0, 0.0, 0
 if results:
     strat = results[0]; t_info = strat.analyzers.trades.get_analysis(); d_info = strat.analyzers.drawdown.get_analysis()

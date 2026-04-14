@@ -5,8 +5,8 @@ from numba import njit
 import math
 
 # ==========================================
-# [The Real 100.0% Parity v4.6] 
-# Vectorbt Universal Fix - Typing & Logic 완결
+# [The Real 100.0% Parity v4.7] 
+# Vectorbt Hardened Fix - AttributeError & JIT 완결
 # ==========================================
 
 # [지표 엔진: NaN-Safe]
@@ -15,11 +15,10 @@ def n_sma(s, l):
     res = np.full(len(s), np.nan)
     for i in range(len(s)):
         if i < l - 1: continue
-        valid_sum = 0.0; count = 0
+        v_sum = 0.0; count = 0
         for j in range(i - l + 1, i + 1):
-            if not np.isnan(s[j]):
-                valid_sum += s[j]; count += 1
-        if count == l: res[i] = valid_sum / l
+            if not np.isnan(s[j]): v_sum += s[j]; count += 1
+        if count == l: res[i] = v_sum / l
     return res
 
 @njit
@@ -133,9 +132,10 @@ def order_func_nb(c, o, h, l, cl, hlp_t, llp_t, atp, ats, trm,
                   id_a, price_a, size_a):
     
     i = c.i; col = c.col
-    # 🚨 [V4.6] JIT 안정성 필드명 피격: last_position/last_cash 사용
-    pos = c.last_position; cash = c.last_cash
-    tick = 10.0**-dec; slip = slip_ticks * tick
+    # 🚨 [V4.7] 정확한 속성명 사용 (AttributeError 방지)
+    pos = c.position_now; cash = c.cash_now
+    
+    p10 = 10.0**dec; tick = 1.0/p10; slip = slip_ticks * tick
     
     idx_h = i - 1 - h_i
     if idx_h < 0: return vbt.portfolio.nb.order_nothing_nb
@@ -146,14 +146,14 @@ def order_func_nb(c, o, h, l, cl, hlp_t, llp_t, atp, ats, trm,
         if not np.isnan(hlp) and hlp > 0:
             if (h[i] > hlp if o_m_h == 'limits' else cl[i] > hlp):
                 ep = (max(o[i], hlp) if o_m_h == 'limits' else cl[i]) + slip
-                qty = np.floor((cash / ep) * 10.0**dec + 0.5) / 10.0**dec
+                qty = np.floor((cash / ep) * p10 + 0.5) / p10
                 if qty > 0:
                     id_a[col] = 1; price_a[col] = ep; size_a[col] = qty
                     return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=vbt.portfolio.nb.SizeType.Amount)
         if not np.isnan(llp) and llp > 0:
             if (l[i] < llp if o_m_l == 'limits' else cl[i] < llp):
                 ep = (min(o[i], llp) if o_m_l == 'limits' else cl[i]) + slip
-                qty = np.floor((cash / ep) * 10.0**dec + 0.5) / 10.0**dec
+                qty = np.floor((cash / ep) * p10 + 0.5) / p10
                 if qty > 0:
                     id_a[col] = 2; price_a[col] = ep; size_a[col] = qty
                     return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=vbt.portfolio.nb.SizeType.Amount)
@@ -176,14 +176,13 @@ def order_func_nb(c, o, h, l, cl, hlp_t, llp_t, atp, ats, trm,
             exit_p = (tpp if h[i] >= tpp else slp) if exit_mode == 'limits' else cl[i]
             if exit_mode == 'limits' and (o[i] >= tpp or o[i] <= slp): exit_p = o[i]
             exit_p -= slip
-            target_dec = 10.0**dec
-            if inst == 2 and pos > (np.floor((size_a[col] * 0.6) * target_dec + 0.5) / target_dec):
-                return vbt.portfolio.nb.order_nb(size=-(np.floor((pos/2)*target_dec + 0.5)/target_dec), price=exit_p, size_type=vbt.portfolio.nb.SizeType.Amount)
+            if inst == 2 and pos > (np.floor((size_a[col] * 0.6) * p10 + 0.5) / p10):
+                return vbt.portfolio.nb.order_nb(size=-(np.floor((pos/2)*p10+0.5)/p10), price=exit_p, size_type=vbt.portfolio.nb.SizeType.Amount)
             else:
                 return vbt.portfolio.nb.order_nb(size=-pos, price=exit_p, size_type=vbt.portfolio.nb.SizeType.Amount)
     return vbt.portfolio.nb.order_nothing_nb
 
-# 시뮬레이션 (Standard Mode + Stability Fix)
+# 시뮬레이션
 portfolio = vbt.Portfolio.from_order_func(
     data['Close'], order_func_nb,
     o_np, h_np, l_np, c_np, hl_p_triggers, ll_p_triggers, atr_tp, atr_sl, tr_ma,
@@ -192,6 +191,7 @@ portfolio = vbt.Portfolio.from_order_func(
     id_arr, price_arr, size_arr,
     flexible=False, init_cash=1000000, fees=0.0008, cash_sharing=False
 )
+
 stats = portfolio.stats()
 metrics = {
     "Total Return (%)": round(np.nan_to_num(float(portfolio.total_return() * 100.0)), 2),

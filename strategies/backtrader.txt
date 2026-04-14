@@ -3,8 +3,8 @@ import math
 import datetime
 
 # ==========================================
-# [The Real 100.0% Parity v4.5] 
-# Backtrader Standard Mode Fix - 거래수 0 문제 완전 해결
+# [The Real 100.0% Parity v4.7] 
+# Backtrader Hardened Fix - 수량 증발 & 문법 에러 완결
 # ==========================================
 
 def pine_round(x): return math.floor(x + 0.5)
@@ -111,7 +111,10 @@ class TestStrategy(bt.Strategy):
         if order.status == order.Completed:
             if order.isbuy():
                 self.pending_entry = None; self.entry_id = order.info.get('id')
-                q = math.ceil(order.executed.size / self.p.installment)
+                # 🚨 [V4.7] 분할 매도 시 수량 올림 버근 해결
+                pow10 = 10 ** self.p.exchange_decimal
+                raw_q = order.executed.size / self.p.installment
+                q = math.ceil(raw_q * pow10) / pow10
                 self.issue_exit_orders(order.executed.price, self.get_qty(q))
             elif order.issell():
                 if self.position.size > 0: self.partial_filled = True
@@ -132,7 +135,9 @@ class TestStrategy(bt.Strategy):
                     slp = sf if self.p.hl_sl_price=='Fixed' else (sa if self.p.hl_sl_price=='ATR' else max(sf, sa))
                 else: tpp, slp = ep*(1+self.p.tp_ll_per), ep*(1-self.p.sl_ll_per)
                 if not math.isnan(tpp) and (cur_cl >= tpp or cur_cl <= slp):
-                    q = self.get_qty(self.position.size if self.p.installment == 1 or self.partial_filled else math.ceil(self.position.size / 2))
+                    pow10 = 10 ** self.p.exchange_decimal
+                    raw_p = self.position.size if self.p.installment == 1 or self.partial_filled else math.ceil((self.position.size/2)*pow10)/pow10
+                    q = self.get_qty(raw_p)
                     self.sell(size=q); return
             if self.p.tr_hl and not math.isnan(self.tr_ma[0]) and cur_cl < self.tr_ma[0] and self.dataclose[-1] >= self.tr_ma[-1]: self.close(); return
         if not self.position:
@@ -140,27 +145,29 @@ class TestStrategy(bt.Strategy):
             h_v = self.hott.hott[0]; hlp = self.bb.top[0] if self.p.hl_price=='BB' else (h_v if self.p.hl_price=='H/L OTT' else max(h_v, self.bb.top[0]))
             llp = self.ma2[0]*(1 - self.ma1[0]*self.p.ll_mult - self.p.entry_ll_per) if self.p.ll_volatility_filter else self.ma2[0]*(1-self.p.entry_ll_per)
             if math.isnan(hlp) or math.isnan(llp): return
-            q = self.get_qty(pine_round(self.broker.getvalue() / cur_cl))
             
-            # 🚨 [V4.5] Stop 주문 가격 보호 (현재가와 역전 방지)
+            # 🚨 [V4.7] 비트코인 수량 증발 방지 (pow10 스케일링)
+            pow10 = 10 ** self.p.exchange_decimal
+            q = self.get_qty(pine_round((self.broker.getvalue() / cur_cl) * pow10) / pow10)
+            
             if hlp > 0 and self.p.open_at_hl == 'limits':
                 adj_hlp = max(hlp, cur_cl * 1.0001)
-                o = self.buy(exectype=bt.Order.Stop, price=adj_hlp, size=q, valid=bt.Order.DAY)
+                o = self.buy(exectype=bt.Order.Stop, price=adj_hlp, size=q)
                 if o: o.info['id'] = 'HL'; self.pending_entry = o
             elif llp > 0 and self.p.open_at_ll == 'limits':
                 adj_llp = min(llp, cur_cl * 0.9999)
-                o = self.buy(exectype=bt.Order.Limit, price=adj_llp, size=q, valid=bt.Order.DAY)
+                o = self.buy(exectype=bt.Order.Limit, price=adj_llp, size=q)
                 if o: o.info['id'] = 'LL'; self.pending_entry = o
             elif (self.p.open_at_hl == 'close' and cur_cl > hlp) or (self.p.open_at_ll == 'close' and cur_cl < llp):
                 eid = 'HL' if cur_cl > hlp else 'LL'
                 o = self.buy(size=q)
                 if o: o.info['id'] = eid
 
-# 시뮬레이션 및 데이터 출력
+# 시뮬레이션 및 메트릭 출력
 cerebro = bt.Cerebro(); cerebro.addstrategy(TestStrategy); cerebro.adddata(bt.feeds.PandasData(dataname=data))
 cerebro.broker.setcash(1000000.0); cerebro.broker.setcommission(commission=0.0008)
 cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name='trades'); cerebro.addanalyzer(bt.analyzers.DrawDown, _name='drawdown')
-init_val = cerebro.broker.getvalue(); results = cerebro.run(); final_val = cerebro.broker.getvalue()
+init_val = 1000000.0; results = cerebro.run(); final_val = cerebro.broker.getvalue()
 t_info = results[0].analyzers.trades.get_analysis(); d_info = results[0].analyzers.drawdown.get_analysis()
 total_tr = t_info.total.total if 'total' in t_info else 0
 win_rate = round((t_info.won.total / total_tr) * 100, 2) if total_tr > 0 and 'won' in t_info else 0.0
