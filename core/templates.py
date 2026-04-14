@@ -125,7 +125,7 @@ hl_p_triggers = (hott_v if hl_price_type == 'H/L OTT' else (bb_u if hl_price_typ
 ll_p_triggers = (ma2 * (1 - ma1 * ll_mult - en_ll_per) if ll_vol_filter else ma2 * (1 - en_ll_per))
 
 # ==========================================
-# [중요: v4.2] 상태 추적 (인덱싱 오류 수정 완료)
+# [중요: v4.2] 상태 추적 (엔진 복구 완료)
 # ==========================================
 num_cols = 1
 id_arr = np.zeros(num_cols, dtype=np.int32) 
@@ -138,7 +138,10 @@ def order_func_nb(c, o, h, l, cl, hlp_t, llp_t, atp, ats, trm,
                   tph, slh, tpl, sll, tpm, slm, slip_ticks, dec, 
                   id_a, price_a, size_a):
     
-    i = c.i; col = c.col; pos = c.position_now; cash = c.cash_now
+    i = c.i; col = c.col
+    # 🚨 [V4.2 Hotfix] 속성 직접 참조 (일부 버전 인덱싱 오류 방지)
+    pos = c.position_now; cash = c.cash_now
+    
     if i < 1 + h_i: return vbt.portfolio.nb.order_nothing_nb
     
     def get_qty(val, d): 
@@ -149,18 +152,24 @@ def order_func_nb(c, o, h, l, cl, hlp_t, llp_t, atp, ats, trm,
     if pos == 0:
         id_a[col] = 0; price_a[col] = 0.0; size_a[col] = 0.0
         hlp, llp = hlp_t[i-1-h_i], llp_t[i-1]
-        t_en_h = (h[i] > hlp) if o_m_h == 'limits' else (cl[i] > hlp)
-        if t_en_h and hlp > 0 and not np.isnan(hlp):
-            entry_p = (max(o[i], hlp) if o_m_h == 'limits' else cl[i]) + slip
-            qty = get_qty(cash / entry_p, dec)
-            id_a[col] = 1; price_a[col] = entry_p; size_a[col] = qty
-            return vbt.portfolio.nb.order_nb(size=qty, price=entry_p, size_type=vbt.portfolio.nb.SizeType.Amount)
-        t_en_l = (l[i] < llp) if o_m_l == 'limits' else (cl[i] < llp)
-        if t_en_l and llp > 0 and not np.isnan(llp):
-            entry_p = (min(o[i], llp) if o_m_l == 'limits' else cl[i]) + slip
-            qty = get_qty(cash / entry_p, dec)
-            id_a[col] = 2; price_a[col] = entry_p; size_a[col] = qty
-            return vbt.portfolio.nb.order_nb(size=qty, price=entry_p, size_type=vbt.portfolio.nb.SizeType.Amount)
+        
+        if not np.isnan(hlp) and hlp > 0:
+            t_en_h = (h[i] > hlp) if o_m_h == 'limits' else (cl[i] > hlp)
+            if t_en_h:
+                entry_p = (max(o[i], hlp) if o_m_h == 'limits' else cl[i]) + slip
+                qty = get_qty(cash / entry_p, dec)
+                if qty > 0:
+                    id_a[col] = 1; price_a[col] = entry_p; size_a[col] = qty
+                    return vbt.portfolio.nb.order_nb(size=qty, price=entry_p, size_type=vbt.portfolio.nb.SizeType.Amount)
+        
+        if not np.isnan(llp) and llp > 0:
+            t_en_l = (l[i] < llp) if o_m_l == 'limits' else (cl[i] < llp)
+            if t_en_l:
+                entry_p = (min(o[i], llp) if o_m_l == 'limits' else cl[i]) + slip
+                qty = get_qty(cash / entry_p, dec)
+                if qty > 0:
+                    id_a[col] = 2; price_a[col] = entry_p; size_a[col] = qty
+                    return vbt.portfolio.nb.order_nb(size=qty, price=entry_p, size_type=vbt.portfolio.nb.SizeType.Amount)
             
     if pos > 0:
         if use_tr and cl[i] < trm[i] and cl[i-1] >= trm[i-1]:
@@ -179,11 +188,10 @@ def order_func_nb(c, o, h, l, cl, hlp_t, llp_t, atp, ats, trm,
         is_hit = (h[i] >= tpp or l[i] <= slp) if exit_mode == 'limits' else (cl[i] >= tpp or cl[i] <= slp)
         if is_hit:
             exit_p = (tpp if h[i] >= tpp else slp) if exit_mode == 'limits' else cl[i]
-            if exit_mode == 'limits':
-                if o[i] >= tpp or o[i] <= slp: exit_p = o[i]
+            if exit_mode == 'limits' and (o[i] >= tpp or o[i] <= slp): exit_p = o[i]
             exit_p -= slip
             orig_size = size_a[col]
-            if inst_num == 2 and pos > get_qty(orig_size * 0.6, dec):
+            if inst == 2 and pos > get_qty(orig_size * 0.6, dec):
                 return vbt.portfolio.nb.order_nb(size=-get_qty(pos/2, dec), price=exit_p, size_type=vbt.portfolio.nb.SizeType.Amount)
             else:
                 return vbt.portfolio.nb.order_nb(size=-pos, price=exit_p, size_type=vbt.portfolio.nb.SizeType.Amount)
@@ -231,13 +239,10 @@ class UniversalMA(bt.Indicator):
         elif t == 'SMMA (RMA)': self.lines.ma = bt.indicators.SmoothedMovingAverage(d, period=p)
         elif t == 'WMA': self.lines.ma = bt.indicators.WeightedMovingAverage(d, period=p)
         elif t == 'VWMA':
-            # 🚨 [V2.1] 볼륨 데이터 접근성 강화 (AttributeError 방어)
             try:
-                # 데이터 피트(datas[0])에서 볼륨 라인 확보
                 vol = self.data._owner.volume if hasattr(self.data, '_owner') and hasattr(self.data._owner, 'volume') else self.data.volume
                 self.lines.ma = bt.indicators.SMA(d * vol, period=p) / bt.indicators.SMA(vol, period=p)
             except Exception:
-                # 보조 방어: 전체 데이터셋에서 찾기
                 v_line = self.data._owner.datas[0].volume
                 self.lines.ma = bt.indicators.SMA(d * v_line, period=p) / bt.indicators.SMA(v_line, period=p)
         else: self.lines.ma = bt.indicators.SMA(d, period=p)
@@ -258,14 +263,13 @@ class HOTTIndicator(bt.Indicator):
         if self.dir == -1 and ma > self.ssp: self.dir = 1
         elif self.dir == 1 and ma < self.lsp: self.dir = -1
         mt = self.lsp if self.dir == 1 else self.ssp
-        # 🚨 [V2.1] percent -> self.p.percent 오타 수정
         self.lines.hott[0] = mt * (200 + self.p.percent) / 200 if ma > mt else mt * (200 - self.p.percent) / 200
 
 class BBCustom(bt.Indicator):
     lines = ('mid', 'top', 'bot')
     params = (('period', 20), ('dev', 2.0), ('min_width', 3.0), ('matype', 'EMA'))
     def __init__(self):
-        self.mid_ma = UniversalMA(self.data.close, period=self.p.period, matype=self.p.matype)
+        self.mid_ma = UniversalMA(self.data, period=self.p.period, matype=self.p.matype)
         self.stddev = bt.indicators.StdDev(self.data.close, period=self.p.period)
     def next(self):
         mid = self.mid_ma[0]; std = self.stddev[0] * self.p.dev; lbbdev = max(std, mid * self.p.min_width / 100.0)
@@ -312,7 +316,6 @@ class TestStrategy(bt.Strategy):
     )
     def __init__(self):
         self.dataclose = self.datas[0].close; self.datahigh = self.datas[0].high; self.datalow = self.datas[0].low
-        # 🚨 [V2.1] self.datas[0]를 명시적으로 전달하여 볼륨 접근성 보장
         self.atr_tp = bt.indicators.ATR(self.datas[0], period=self.p.atr_length)
         self.atr_sl = bt.indicators.ATR(self.datas[0], period=self.p.atr_length2)
         safe_close = bt.If(self.dataclose > 0, self.dataclose, 0.000001)
@@ -320,7 +323,7 @@ class TestStrategy(bt.Strategy):
         self.ma2 = UniversalMA(self.datas[0], period=self.p.ma2_length, matype=self.p.ma2_type)
         self.bb = BBCustom(period=self.p.bb_length, dev=self.p.bb_dev, min_width=self.p.bb_min_width, matype=self.p.bb_ma_type)
         self.hott = HOTTIndicator(self.datas[0], period=self.p.hott_h_length, length=self.p.hott_length, percent=self.p.hott_percent, use_high=self.p.hott_use_high, matype=self.p.hott_ma_type)
-        self.tr_ma = UniversalMA(self.datas[0], period=self.p.tr_ma_length, matype=self.p.tr_ma_type)
+        self.tr_ma = UniversalMA(self.dataclose, period=self.p.tr_ma_length, matype=self.p.tr_ma_type)
         self.entry_id = None; self.partial_filled = False; self.tp_order = None; self.sl_order = None
         self.pending_entry = None 
         tick_size = 10.0 ** -self.p.exchange_decimal
@@ -335,13 +338,15 @@ class TestStrategy(bt.Strategy):
         if exit_mode == 'close': return
         if self.entry_id == 'HL':
             tp_f, tp_a = base_price*(1+self.p.tp_hl_per), base_price + self.p.hl_tp_atr_mul*self.atr_tp[0]
-            tpp = tp_f if self.p.hl_tp_price=='Fixed' else (tp_a if self.p.hl_tp_price=='ATR' else max(tp_f, tp_a))
+            tpp = tp_f if self.p.hl_tp_price=='Fixed' else (tp_a if self.p.hl_tp_price=='ATR' else max(tp_f, ta))
             sl_f, sl_a = base_price*(1-self.p.sl_hl_per), base_price - self.p.hl_sl_atr_mul*self.atr_sl[0]
-            slp = sl_f if self.p.hl_sl_price=='Fixed' else (sl_a if self.p.hl_sl_price=='ATR' else max(sl_f, sl_a))
+            slp = sl_f if self.p.hl_sl_price=='Fixed' else (sl_a if self.p.hl_sl_price=='ATR' else max(sf, sa))
         else: tpp, slp = base_price*(1+self.p.tp_ll_per), base_price*(1-self.p.sl_ll_per)
         if tpp and slp and size > 0:
-            self.tp_order = self.sell(exectype=bt.Order.Limit, price=tpp, size=size)
-            self.sl_order = self.sell(exectype=bt.Order.Stop, price=slp, size=size, oco=self.tp_order)
+            order = self.sell(exectype=bt.Order.Limit, price=tpp, size=size)
+            if order: self.tp_order = order
+            order = self.sell(exectype=bt.Order.Stop, price=slp, size=size, oco=self.tp_order if self.tp_order else None)
+            if order: self.sl_order = order
 
     def notify_order(self, order):
         if order.status == order.Completed:
@@ -363,10 +368,10 @@ class TestStrategy(bt.Strategy):
             if exit_mode == 'close':
                 if self.entry_id == 'HL':
                     tp_f, tp_a = ep*(1+self.p.tp_hl_per), ep + self.p.hl_tp_atr_mul*self.atr_tp[0]
-                    tpp = tp_f if self.p.hl_tp_price=='Fixed' else (tp_a if self.p.hl_tp_price=='ATR' else max(tp_f, tp_a))
+                    tpp = tp_f if self.p.hl_tp_price=='Fixed' else (tp_a if self.p.hl_tp_price=='ATR' else max(tf, ta))
                     sl_f, sl_a = ep*(1-self.p.sl_hl_per), ep - self.p.hl_sl_atr_mul*self.atr_sl[0]
-                    slp = sl_f if self.p.hl_sl_price=='Fixed' else (sl_a if self.p.hl_sl_price=='ATR' else max(sl_f, sl_a))
-                else: tpp, slp = ep*(1+self.p.tp_ll_per), ep*(1-self.p.sl_ll_per)
+                    slp = sl_f if self.p.hl_sl_price=='Fixed' else (sl_a if self.p.hl_sl_price=='ATR' else max(sf, sa))
+                else: tpp, slp = ep*(1+tpl), ep*(1-sll)
                 if self.dataclose[0] >= tpp or self.dataclose[0] <= slp:
                     qty = self.get_qty(self.position.size if self.p.installment == 1 or self.partial_filled else math.ceil(self.position.size / 2))
                     self.sell(size=qty); return
@@ -380,14 +385,19 @@ class TestStrategy(bt.Strategy):
             qty = self.get_qty(pine_round(raw_qty))
             
             if hlp > 0 and self.p.open_at_hl == 'limits':
-                self.pending_entry = self.buy(exectype=bt.Order.Stop, price=hlp, size=qty, valid=bt.Order.DAY)
-                self.pending_entry.info['id'] = 'HL'
+                order = self.buy(exectype=bt.Order.Stop, price=hlp, size=qty, valid=bt.Order.DAY)
+                if order:
+                    order.info['id'] = 'HL'
+                    self.pending_entry = order
             elif llp > 0 and self.p.open_at_ll == 'limits':
-                self.pending_entry = self.buy(exectype=bt.Order.Limit, price=llp, size=qty, valid=bt.Order.DAY)
-                self.pending_entry.info['id'] = 'LL'
+                order = self.buy(exectype=bt.Order.Limit, price=llp, size=qty, valid=bt.Order.DAY)
+                if order:
+                    order.info['id'] = 'LL'
+                    self.pending_entry = order
             elif (self.p.open_at_hl == 'close' and self.dataclose[0] > hlp) or (self.p.open_at_ll == 'close' and self.dataclose[0] < llp):
                 eid = 'HL' if self.dataclose[0] > hlp else 'LL'
-                self.buy(size=qty).info['id'] = eid
+                order = self.buy(size=qty)
+                if order: order.info['id'] = eid
 
 cerebro = bt.Cerebro(); cerebro.addstrategy(TestStrategy); cerebro.adddata(bt.feeds.PandasData(dataname=data))
 cerebro.broker.setcash(1000000.0); cerebro.broker.setcommission(commission=0.0008)
