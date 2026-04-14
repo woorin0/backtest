@@ -1,4 +1,4 @@
-# [The Real 100.0% Parity] 전략 템플릿 마스터
+# [The Real 100.0% Parity v4.3] 전략 템플릿 마스터 (NaN-Safe Engine)
 
 VECTORBT_STRATEGY = """import vectorbt as vbt
 import pandas as pd
@@ -6,11 +6,73 @@ import numpy as np
 from numba import njit
 import math
 
-# ==========================================
-# [초정밀 엔진] 전처리 및 데이터 로드
-# ==========================================
+# [지표 엔진: NaN-Safe]
+@njit
+def n_sma(s, l):
+    res = np.full(len(s), np.nan)
+    for i in range(len(s)):
+        if i < l - 1: continue
+        valid_sum = 0.0; count = 0
+        for j in range(i - l + 1, i + 1):
+            if not np.isnan(s[j]):
+                valid_sum += s[j]; count += 1
+        if count == l: res[i] = valid_sum / l
+    return res
+
+@njit
+def n_ema(s, l):
+    res = np.full(len(s), np.nan); alpha = 2.0 / (l + 1.0); last_val = np.nan
+    for i in range(len(s)):
+        if np.isnan(s[i]): continue
+        if np.isnan(last_val): 
+            res[i] = s[i]; last_val = s[i]
+        else:
+            res[i] = alpha * s[i] + (1.0 - alpha) * last_val
+            last_val = res[i]
+    return res
+
+@njit
+def n_rma(s, l):
+    res = np.full(len(s), np.nan); alpha = 1.0 / l; last_val = np.nan
+    for i in range(len(s)):
+        if np.isnan(s[i]): continue
+        if np.isnan(last_val):
+            res[i] = s[i]; last_val = s[i]
+        else:
+            res[i] = alpha * s[i] + (1.0 - alpha) * last_val
+            last_val = res[i]
+    return res
+
+@njit
+def n_wma(s, l):
+    res = np.full(len(s), np.nan); w_sum = (l * (l + 1)) / 2
+    for i in range(len(s)):
+        if i < l - 1: continue
+        dot_p = 0.0; valid = True
+        for j in range(l):
+            val = s[i - l + 1 + j]
+            if np.isnan(val): 
+                valid = False; break
+            dot_p += val * (j + 1)
+        if valid: res[i] = dot_p / w_sum
+    return res
+
+@njit
+def n_vwma(c, v, l):
+    cv = c * v
+    res_cv = n_sma(cv, l); res_v = n_sma(v, l)
+    return res_cv / res_v
+
+def calc_ma_vbt(s, v, l, t):
+    if t == 'SMA': return n_sma(s.values, l)
+    elif t == 'EMA': return n_ema(s.values, l)
+    elif t == 'SMMA (RMA)': return n_rma(s.values, l)
+    elif t == 'WMA': return n_wma(s.values, l)
+    elif t == 'VWMA': return n_vwma(s.values, v.values if v is not None else np.ones(len(s)), l)
+    return n_sma(s.values, l)
+
+# [데이터 및 지표 로드]
 c_np, h_np, l_np, o_np = data['Close'].values, data['High'].values, data['Low'].values, data['Open'].values
-v_np = data['Volume'].values if 'Volume' in data.columns else np.ones(len(c_np))
 
 # 파라미터 로드
 if 'optuna_trial' in globals() and optuna_trial:
@@ -44,56 +106,9 @@ else:
     tp_hl_per, sl_hl_per, tp_ll_per, sl_ll_per = 0.015, 0.02, 0.015, 0.015
     ex_dec, inst, tr_hl, slippage_ticks = 3, 1, True, 3
 
-# ==========================================
-# [지표 엔진] Numba 가속 MA/HOTT/BB
-# ==========================================
-@njit
-def n_sma(s, l):
-    res = np.full(len(s), np.nan)
-    for i in range(l - 1, len(s)): res[i] = np.mean(s[i-l+1:i+1])
-    return res
-
-@njit
-def n_ema(s, l):
-    res = np.full(len(s), np.nan); alpha = 2.0 / (l + 1.0)
-    for i in range(len(s)):
-        if i == 0: res[i] = s[i]
-        else: res[i] = alpha * s[i] + (1.0 - alpha) * res[i-1]
-    return res
-
-@njit
-def n_rma(s, l):
-    res = np.full(len(s), np.nan); alpha = 1.0 / l
-    for i in range(len(s)):
-        if i == 0: res[i] = s[i]
-        else: res[i] = alpha * s[i] + (1.0 - alpha) * res[i-1]
-    return res
-
-@njit
-def n_wma(s, l):
-    res = np.full(len(s), np.nan); weight = np.arange(1, l + 1); w_sum = (l * (l + 1)) / 2
-    for i in range(l - 1, len(s)):
-        dot_p = 0.0
-        for j in range(l): dot_p += s[i-l+1+j] * (j+1)
-        res[i] = dot_p / w_sum
-    return res
-
-@njit
-def n_vwma(c, v, l):
-    cv = c * v
-    res_cv = n_sma(cv, l); res_v = n_sma(v, l)
-    return res_cv / res_v
-
-def calc_ma_vbt(s, v, l, t):
-    if t == 'SMA': return n_sma(s.values, l)
-    elif t == 'EMA': return n_ema(s.values, l)
-    elif t == 'SMMA (RMA)': return n_rma(s.values, l)
-    elif t == 'WMA': return n_wma(s.values, l)
-    elif t == 'VWMA': return n_vwma(s.values, v.values, l)
-    return n_sma(s.values, l)
-
 bb_mid = calc_ma_vbt(data['Close'], data['Volume'] if 'Volume' in data.columns else None, bb_len, bb_ma_type)
 bb_std = data['Close'].rolling(bb_len).std(ddof=0).values
+# bb_u 계산 전 NaN 체크 절실
 bb_dev = np.maximum(bb_std * bb_dev_in, bb_mid * bb_min_w / 100.0)
 bb_u = bb_mid + bb_dev
 h_src = data['High'] if hott_h_src == 'High' else data['Close']
@@ -102,10 +117,12 @@ mavg_h_np = calc_ma_vbt(mavg_h_pre, data['Volume'] if 'Volume' in data.columns e
 
 @njit
 def calc_hott_nb(mavg_np, percent):
-    n = len(mavg_np); hott = np.zeros(n); lsp, ssp, dv = 0.0, 0.0, 1
-    for i in range(1, n):
-        ma = mavg_np[i]; fk = ma * percent * 0.01; ls, ss = ma - fk, ma + fk
-        if i == 1: lsp, ssp = ls, ss
+    n = len(mavg_np); hott = np.full(n, np.nan); lsp, ssp, dv = np.nan, np.nan, 1
+    for i in range(n):
+        ma = mavg_np[i]
+        if np.isnan(ma): continue
+        fk = ma * percent * 0.01; ls, ss = ma - fk, ma + fk
+        if np.isnan(lsp): lsp, ssp = ls, ss; continue
         if ma > lsp: lsp = max(ls, lsp)
         if ma < ssp: ssp = min(ss, ssp)
         if dv == -1 and ma > ssp: dv = 1
@@ -124,9 +141,7 @@ tr_ma = calc_ma_vbt(data['Close'], data['Volume'] if 'Volume' in data.columns el
 hl_p_triggers = (hott_v if hl_price_type == 'H/L OTT' else (bb_u if hl_price_type == 'BB' else np.maximum(hott_v, bb_u)))
 ll_p_triggers = (ma2 * (1 - ma1 * ll_mult - en_ll_per) if ll_vol_filter else ma2 * (1 - en_ll_per))
 
-# ==========================================
-# [중요: v4.2] 상태 추적 (엔진 복구 완료)
-# ==========================================
+# [상태 관리 및 엔진]
 num_cols = 1
 id_arr = np.zeros(num_cols, dtype=np.int32) 
 price_arr = np.zeros(num_cols, dtype=np.float64)
@@ -138,80 +153,65 @@ def order_func_nb(c, o, h, l, cl, hlp_t, llp_t, atp, ats, trm,
                   tph, slh, tpl, sll, tpm, slm, slip_ticks, dec, 
                   id_a, price_a, size_a):
     
-    i = c.i; col = c.col
-    # 🚨 [V4.2 Hotfix] 속성 직접 참조 (일부 버전 인덱싱 오류 방지)
-    pos = c.position_now; cash = c.cash_now
-    
-    if i < 1 + h_i: return vbt.portfolio.nb.order_nothing_nb
-    
-    def get_qty(val, d): 
-        mult = 10.0**d
-        return math.floor(val * mult + 0.5) / mult
+    i = c.i; col = c.col; pos = c.position_now; cash = c.cash_now
+    def get_qty(val, d): return math.floor(val * 10.0**d + 0.5) / 10.0**d
     tick = 10.0**-dec; slip = slip_ticks * tick
+    
+    # 🚨 [V4.3] NaN Poisoning 방어: 트리거 가격이 유효할 때까지 대기
+    idx_h = i - 1 - h_i
+    if idx_h < 0: return vbt.portfolio.nb.order_nothing_nb
+    hlp, llp = hlp_t[idx_h], llp_t[i-1]
     
     if pos == 0:
         id_a[col] = 0; price_a[col] = 0.0; size_a[col] = 0.0
-        hlp, llp = hlp_t[i-1-h_i], llp_t[i-1]
-        
         if not np.isnan(hlp) and hlp > 0:
-            t_en_h = (h[i] > hlp) if o_m_h == 'limits' else (cl[i] > hlp)
-            if t_en_h:
-                entry_p = (max(o[i], hlp) if o_m_h == 'limits' else cl[i]) + slip
-                qty = get_qty(cash / entry_p, dec)
+            if (h[i] > hlp if o_m_h == 'limits' else cl[i] > hlp):
+                ep = (max(o[i], hlp) if o_m_h == 'limits' else cl[i]) + slip
+                qty = get_qty(cash / ep, dec)
                 if qty > 0:
-                    id_a[col] = 1; price_a[col] = entry_p; size_a[col] = qty
-                    return vbt.portfolio.nb.order_nb(size=qty, price=entry_p, size_type=vbt.portfolio.nb.SizeType.Amount)
-        
+                    id_a[col] = 1; price_a[col] = ep; size_a[col] = qty
+                    return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=vbt.portfolio.nb.SizeType.Amount)
         if not np.isnan(llp) and llp > 0:
-            t_en_l = (l[i] < llp) if o_m_l == 'limits' else (cl[i] < llp)
-            if t_en_l:
-                entry_p = (min(o[i], llp) if o_m_l == 'limits' else cl[i]) + slip
-                qty = get_qty(cash / entry_p, dec)
+            if (l[i] < llp if o_m_l == 'limits' else cl[i] < llp):
+                ep = (min(o[i], llp) if o_m_l == 'limits' else cl[i]) + slip
+                qty = get_qty(cash / ep, dec)
                 if qty > 0:
-                    id_a[col] = 2; price_a[col] = entry_p; size_a[col] = qty
-                    return vbt.portfolio.nb.order_nb(size=qty, price=entry_p, size_type=vbt.portfolio.nb.SizeType.Amount)
+                    id_a[col] = 2; price_a[col] = ep; size_a[col] = qty
+                    return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=vbt.portfolio.nb.SizeType.Amount)
             
     if pos > 0:
-        if use_tr and cl[i] < trm[i] and cl[i-1] >= trm[i-1]:
-            exit_p = cl[i] - slip
-            return vbt.portfolio.nb.order_nb(size=-pos, price=exit_p, size_type=vbt.portfolio.nb.SizeType.Amount)
-        
+        if use_tr and not np.isnan(trm[i]) and cl[i] < trm[i] and cl[i-1] >= trm[i-1]:
+            return vbt.portfolio.nb.order_nb(size=-pos, price=cl[i]-slip, size_type=vbt.portfolio.nb.SizeType.Amount)
         ep = price_a[col]; cur_state = id_a[col]
         if cur_state == 1: 
-            tf, ta = ep*(1+tph), ep + tpm*atp[i]; tpp = tf if tp_t=='Fixed' else (ta if tp_t=='ATR' else max(tf, ta))
-            sf, sa = ep*(1-slh), ep - slm*ats[i]; slp = sf if sl_t=='Fixed' else (sa if sl_t=='ATR' else max(sf, sa))
+            tf, ta = ep*(1+tph), ep + tpm*atp[i]
+            tpp = tf if tp_t=='Fixed' else (ta if tp_t=='ATR' else max(tf, ta))
+            sf, sa = ep*(1-slh), ep - slm*ats[i]
+            slp = sf if sl_t=='Fixed' else (sa if sl_t=='ATR' else max(sf, sa))
             exit_mode = e_m_h
         else: 
-            tpp, slp = ep*(1+tpl), ep*(1-sll)
-            exit_mode = e_m_l
-        
+            tpp, slp = ep*(1+tpl), ep*(1-sll); exit_mode = e_m_l
+        if np.isnan(tpp) or np.isnan(slp): return vbt.portfolio.nb.order_nothing_nb
         is_hit = (h[i] >= tpp or l[i] <= slp) if exit_mode == 'limits' else (cl[i] >= tpp or cl[i] <= slp)
         if is_hit:
             exit_p = (tpp if h[i] >= tpp else slp) if exit_mode == 'limits' else cl[i]
             if exit_mode == 'limits' and (o[i] >= tpp or o[i] <= slp): exit_p = o[i]
             exit_p -= slip
-            orig_size = size_a[col]
-            if inst == 2 and pos > get_qty(orig_size * 0.6, dec):
+            if inst == 2 and pos > get_qty(size_a[col] * 0.6, dec):
                 return vbt.portfolio.nb.order_nb(size=-get_qty(pos/2, dec), price=exit_p, size_type=vbt.portfolio.nb.SizeType.Amount)
             else:
                 return vbt.portfolio.nb.order_nb(size=-pos, price=exit_p, size_type=vbt.portfolio.nb.SizeType.Amount)
-                
     return vbt.portfolio.nb.order_nothing_nb
 
-# 시뮬레이션 실행
+# 시뮬레이션
 portfolio = vbt.Portfolio.from_order_func(
-    data['Close'],
-    order_func_nb,
+    data['Close'], order_func_nb,
     o_np, h_np, l_np, c_np, hl_p_triggers, ll_p_triggers, atr_tp, atr_sl, tr_ma,
     inst, tr_hl, o_m_hl, o_m_ll, e_m_hl, e_m_ll, tp_hl_type, sl_hl_type, h_int,
     tp_hl_per, sl_hl_per, tp_ll_per, sl_ll_per, hl_tp_atr_mul, hl_sl_atr_mul, slippage_ticks, ex_dec,
     id_arr, price_arr, size_arr,
-    flexible=True,
-    init_cash=1000000,
-    fees=0.0008,
-    cash_sharing=True
+    flexible=True, init_cash=1000000, fees=0.0008, cash_sharing=True
 )
-
 stats = portfolio.stats()
 metrics = {
     "Total Return (%)": round(np.nan_to_num(float(portfolio.total_return() * 100.0)), 2),
@@ -226,7 +226,6 @@ BACKTRADER_STRATEGY = """import backtrader as bt
 import math
 import datetime
 
-# [BT v2.0] 파인스크립트 호환 보정 유틸리티
 def pine_round(x): return math.floor(x + 0.5)
 
 class UniversalMA(bt.Indicator):
@@ -240,23 +239,25 @@ class UniversalMA(bt.Indicator):
         elif t == 'WMA': self.lines.ma = bt.indicators.WeightedMovingAverage(d, period=p)
         elif t == 'VWMA':
             try:
-                vol = self.data._owner.volume if hasattr(self.data, '_owner') and hasattr(self.data._owner, 'volume') else self.data.volume
-                self.lines.ma = bt.indicators.SMA(d * vol, period=p) / bt.indicators.SMA(vol, period=p)
+                v = self.data._owner.volume if hasattr(self.data, '_owner') and hasattr(self.data._owner, 'volume') else self.data.volume
+                self.lines.ma = bt.indicators.SMA(d * v, period=p) / bt.indicators.SMA(v, period=p)
             except Exception:
-                v_line = self.data._owner.datas[0].volume
-                self.lines.ma = bt.indicators.SMA(d * v_line, period=p) / bt.indicators.SMA(v_line, period=p)
+                v = self.data._owner.datas[0].volume
+                self.lines.ma = bt.indicators.SMA(d * v, period=p) / bt.indicators.SMA(v, period=p)
         else: self.lines.ma = bt.indicators.SMA(d, period=p)
 
 class HOTTIndicator(bt.Indicator):
     lines = ('hott',)
     params = (('period', 100), ('length', 2), ('percent', 0.6), ('use_high', False), ('matype', 'EMA'))
     def __init__(self):
-        src_data = self.data.high if self.p.use_high else self.data.close
-        self.highest_val = bt.indicators.Highest(src_data, period=self.p.period)
-        self.mavg = UniversalMA(self.highest_val, period=self.p.length, matype=self.p.matype)
-        self.addminperiod(self.p.period + self.p.length)
+        src = self.data.high if self.p.use_high else self.data.close
+        h_val = bt.indicators.Highest(src, period=self.p.period)
+        self.mavg = UniversalMA(h_val, period=self.p.length, matype=self.p.matype)
+        self.addminperiod(self.p.period + self.p.length + 5)
     def next(self):
-        ma = self.mavg[0]; fk = ma * self.p.percent * 0.01; ls, ss = ma - fk, ma + fk
+        ma = self.mavg[0]
+        if math.isnan(ma): return
+        fk = ma * self.p.percent * 0.01; ls, ss = ma - fk, ma + fk
         if not hasattr(self, 'lsp'): self.lsp, self.ssp, self.dir = ls, ss, 1
         if ma > self.lsp: self.lsp = max(ls, self.lsp)
         if ma < self.ssp: self.ssp = min(ss, self.ssp)
@@ -270,9 +271,11 @@ class BBCustom(bt.Indicator):
     params = (('period', 20), ('dev', 2.0), ('min_width', 3.0), ('matype', 'EMA'))
     def __init__(self):
         self.mid_ma = UniversalMA(self.data, period=self.p.period, matype=self.p.matype)
-        self.stddev = bt.indicators.StdDev(self.data.close, period=self.p.period)
+        self.stddev = bt.indicators.StdDev(self.data.close if hasattr(self.data, 'close') else self.data, period=self.p.period)
     def next(self):
-        mid = self.mid_ma[0]; std = self.stddev[0] * self.p.dev; lbbdev = max(std, mid * self.p.min_width / 100.0)
+        mid = self.mid_ma[0]; std = self.stddev[0] * self.p.dev
+        if math.isnan(mid) or math.isnan(std): return
+        lbbdev = max(std, mid * self.p.min_width / 100.0)
         self.lines.mid[0] = mid; self.lines.top[0] = mid + lbbdev; self.lines.bot[0] = mid - lbbdev
 
 class TestStrategy(bt.Strategy):
@@ -326,35 +329,32 @@ class TestStrategy(bt.Strategy):
         self.tr_ma = UniversalMA(self.dataclose, period=self.p.tr_ma_length, matype=self.p.tr_ma_type)
         self.entry_id = None; self.partial_filled = False; self.tp_order = None; self.sl_order = None
         self.pending_entry = None 
-        tick_size = 10.0 ** -self.p.exchange_decimal
-        self.broker.set_slippage_fixed(3.0 * tick_size)
+        t_size = 10.0 ** -self.p.exchange_decimal
+        self.broker.set_slippage_fixed(3.0 * t_size)
 
-    def get_qty(self, val):
-        dec = self.p.exchange_decimal
-        return math.floor(val * (10**dec)) / (10.0**dec)
+    def get_qty(self, val): return math.floor(val * (10**self.p.exchange_decimal)) / (10.0**self.p.exchange_decimal)
 
-    def issue_exit_orders(self, base_price, size):
+    def issue_exit_orders(self, bp, size):
         exit_mode = self.p.exit_at_hl if self.entry_id == 'HL' else self.p.exit_at_ll
         if exit_mode == 'close': return
         if self.entry_id == 'HL':
-            tp_f, tp_a = base_price*(1+self.p.tp_hl_per), base_price + self.p.hl_tp_atr_mul*self.atr_tp[0]
-            tpp = tp_f if self.p.hl_tp_price=='Fixed' else (tp_a if self.p.hl_tp_price=='ATR' else max(tp_f, ta))
-            sl_f, sl_a = base_price*(1-self.p.sl_hl_per), base_price - self.p.hl_sl_atr_mul*self.atr_sl[0]
-            slp = sl_f if self.p.hl_sl_price=='Fixed' else (sl_a if self.p.hl_sl_price=='ATR' else max(sf, sa))
-        else: tpp, slp = base_price*(1+self.p.tp_ll_per), base_price*(1-self.p.sl_ll_per)
+            tf, ta = bp*(1+self.p.tp_hl_per), bp + self.p.hl_tp_atr_mul*self.atr_tp[0]
+            tpp = tf if self.p.hl_tp_price=='Fixed' else (ta if self.p.hl_tp_price=='ATR' else max(tf, ta))
+            sf, sa = bp*(1-self.p.sl_hl_per), bp - self.p.hl_sl_atr_mul*self.atr_sl[0]
+            slp = sf if self.p.hl_sl_price=='Fixed' else (sa if self.p.hl_sl_price=='ATR' else max(sf, sa))
+        else: tpp, slp = bp*(1+self.p.tp_ll_per), bp*(1-self.p.sl_ll_per)
         if tpp and slp and size > 0:
-            order = self.sell(exectype=bt.Order.Limit, price=tpp, size=size)
-            if order: self.tp_order = order
-            order = self.sell(exectype=bt.Order.Stop, price=slp, size=size, oco=self.tp_order if self.tp_order else None)
-            if order: self.sl_order = order
+            o1 = self.sell(exectype=bt.Order.Limit, price=tpp, size=size)
+            if o1: self.tp_order = o1
+            o2 = self.sell(exectype=bt.Order.Stop, price=slp, size=size, oco=self.tp_order)
+            if o2: self.sl_order = o2
 
     def notify_order(self, order):
         if order.status == order.Completed:
             if order.isbuy():
-                self.pending_entry = None
-                self.entry_id = order.info.get('id')
-                target_qty = math.ceil(order.executed.size / self.p.installment)
-                self.issue_exit_orders(order.executed.price, self.get_qty(target_qty))
+                self.pending_entry = None; self.entry_id = order.info.get('id')
+                q = math.ceil(order.executed.size / self.p.installment)
+                self.issue_exit_orders(order.executed.price, self.get_qty(q))
             elif order.issell():
                 if self.position.size > 0: self.partial_filled = True
                 else: self.entry_id, self.partial_filled = None, False
@@ -367,37 +367,31 @@ class TestStrategy(bt.Strategy):
             ep = self.position.price
             if exit_mode == 'close':
                 if self.entry_id == 'HL':
-                    tp_f, tp_a = ep*(1+self.p.tp_hl_per), ep + self.p.hl_tp_atr_mul*self.atr_tp[0]
-                    tpp = tp_f if self.p.hl_tp_price=='Fixed' else (tp_a if self.p.hl_tp_price=='ATR' else max(tf, ta))
-                    sl_f, sl_a = ep*(1-self.p.sl_hl_per), ep - self.p.hl_sl_atr_mul*self.atr_sl[0]
-                    slp = sl_f if self.p.hl_sl_price=='Fixed' else (sl_a if self.p.hl_sl_price=='ATR' else max(sf, sa))
-                else: tpp, slp = ep*(1+tpl), ep*(1-sll)
-                if self.dataclose[0] >= tpp or self.dataclose[0] <= slp:
-                    qty = self.get_qty(self.position.size if self.p.installment == 1 or self.partial_filled else math.ceil(self.position.size / 2))
-                    self.sell(size=qty); return
-            if self.p.tr_hl and self.dataclose[0] < self.tr_ma[0] and self.dataclose[-1] >= self.tr_ma[-1]: self.close(); return
-
+                    tf, ta = ep*(1+self.p.tp_hl_per), ep + self.p.hl_tp_atr_mul*self.atr_tp[0]
+                    tpp = tf if self.p.hl_tp_price=='Fixed' else (ta if self.p.hl_tp_price=='ATR' else max(tf, ta))
+                    sf, sa = ep*(1-sl_hl_per if 'sl_hl_per' in globals() else 0.02), ep - self.p.hl_sl_atr_mul*self.atr_sl[0]
+                    slp = sf if self.p.hl_sl_price=='Fixed' else (sa if self.p.hl_sl_price=='ATR' else max(sf, sa))
+                else: tpp, slp = ep*(1+self.p.tp_ll_per), ep*(1-self.p.sl_ll_per)
+                if not math.isnan(tpp) and (self.dataclose[0] >= tpp or self.dataclose[0] <= slp):
+                    q = self.get_qty(self.position.size if self.p.installment == 1 or self.partial_filled else math.ceil(self.position.size / 2))
+                    self.sell(size=q); return
+            if self.p.tr_hl and not math.isnan(self.tr_ma[0]) and self.dataclose[0] < self.tr_ma[0] and self.dataclose[-1] >= self.tr_ma[-1]: self.close(); return
         if not self.position:
             if self.pending_entry: self.cancel(self.pending_entry)
             h_v = self.hott.hott[0]; hlp = self.bb.top[0] if self.p.hl_price=='BB' else (h_v if self.p.hl_price=='H/L OTT' else max(h_v, self.bb.top[0]))
             llp = self.ma2[0]*(1 - self.ma1[0]*self.p.ll_mult - self.p.entry_ll_per) if self.p.ll_volatility_filter else self.ma2[0]*(1-self.p.entry_ll_per)
-            raw_qty = self.broker.getvalue() / self.dataclose[0]
-            qty = self.get_qty(pine_round(raw_qty))
-            
+            if math.isnan(hlp) or math.isnan(llp): return
+            q = self.get_qty(pine_round(self.broker.getvalue() / self.dataclose[0]))
             if hlp > 0 and self.p.open_at_hl == 'limits':
-                order = self.buy(exectype=bt.Order.Stop, price=hlp, size=qty, valid=bt.Order.DAY)
-                if order:
-                    order.info['id'] = 'HL'
-                    self.pending_entry = order
+                o = self.buy(exectype=bt.Order.Stop, price=hlp, size=q, valid=bt.Order.DAY)
+                if o: o.info['id'] = 'HL'; self.pending_entry = o
             elif llp > 0 and self.p.open_at_ll == 'limits':
-                order = self.buy(exectype=bt.Order.Limit, price=llp, size=qty, valid=bt.Order.DAY)
-                if order:
-                    order.info['id'] = 'LL'
-                    self.pending_entry = order
+                o = self.buy(exectype=bt.Order.Limit, price=llp, size=q, valid=bt.Order.DAY)
+                if o: o.info['id'] = 'LL'; self.pending_entry = o
             elif (self.p.open_at_hl == 'close' and self.dataclose[0] > hlp) or (self.p.open_at_ll == 'close' and self.dataclose[0] < llp):
                 eid = 'HL' if self.dataclose[0] > hlp else 'LL'
-                order = self.buy(size=qty)
-                if order: order.info['id'] = eid
+                o = self.buy(size=q); 
+                if o: o.info['id'] = eid
 
 cerebro = bt.Cerebro(); cerebro.addstrategy(TestStrategy); cerebro.adddata(bt.feeds.PandasData(dataname=data))
 cerebro.broker.setcash(1000000.0); cerebro.broker.setcommission(commission=0.0008)
