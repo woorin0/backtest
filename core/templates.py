@@ -210,8 +210,8 @@ def order_func_nb(c, o, h, l, cl, hlp_t, llp_t, atp, ats, trm,
             if not is_tp:
                 exit_p -= slip
             
-            if inst_num == 2 and pos > (np.floor((size_a[col] * 0.6) * p10 + 0.5) / p10):
-                return vbt.portfolio.nb.order_nb(size=-(np.floor((pos/2) * p10 + 0.5) / p10), price=exit_p, size_type=0)
+            if inst_num == 2 and pos > (np.ceil((size_a[col] * 0.6) * p10) / p10):
+                return vbt.portfolio.nb.order_nb(size=-(np.ceil((pos/2) * p10) / p10), price=exit_p, size_type=0)
             else:
                 return vbt.portfolio.nb.order_nb(size=-pos, price=exit_p, size_type=0)
     return vbt.portfolio.nb.order_nothing_nb()
@@ -223,7 +223,7 @@ portfolio = vbt.Portfolio.from_order_func(
     inst, tr_hl, o_m_hl, o_m_ll, e_m_hl, e_m_ll, tp_hl_type, sl_hl_type, h_int,
     tp_hl_per, sl_hl_per, tp_ll_per, sl_ll_per, hl_tp_atr_mul, hl_sl_atr_mul, slippage_ticks, ex_dec,
     id_arr, price_arr, size_arr,
-    flexible=False, init_cash=1000000, fees=0.0008, cash_sharing=False
+    flexible=False, init_cash=1000000, commission=0.0008, cash_sharing=False
 )
 stats = portfolio.stats()
 metrics = {
