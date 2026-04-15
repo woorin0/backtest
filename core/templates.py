@@ -159,30 +159,31 @@ def order_func_nb(c, o, h, l, cl, hlp_t, llp_t, atp, ats, trm,
     p10 = 10.0**dec; tick = 1.0/p10; slip = slip_ticks * tick
     
     idx_h = i - 1 - h_i
-    if idx_h < 0: return vbt.portfolio.nb.order_nothing_nb
+    if idx_h < 0: return vbt.portfolio.nb.order_nothing_nb()
     hlp, llp = hlp_t[idx_h], llp_t[i-1]
     
     if pos == 0:
         id_a[col] = 0; price_a[col] = 0.0; size_a[col] = 0.0
         if not np.isnan(hlp) and hlp > 0:
             if (h[i] > hlp if o_m_h == 'limits' else cl[i] > hlp):
-                ep = (max(o[i], hlp) if o_m_h == 'limits' else cl[i]) + slip
+                ep = (max(o[i], hlp) if o_m_h == 'limits' else cl[i]) + slip # HL은 돌파이므로 슬리피지 적용
                 qty = np.floor((cash / ep) * p10 + 0.5) / p10
                 if qty > 0:
                     id_a[col] = 1; price_a[col] = ep; size_a[col] = qty
-                    return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=vbt.portfolio.nb.SizeType.Amount)
+                    return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=0)
         if not np.isnan(llp) and llp > 0:
             if (l[i] < llp if o_m_l == 'limits' else cl[i] < llp):
-                ep = (min(o[i], llp) if o_m_l == 'limits' else cl[i]) + slip
+                ep = (min(o[i], llp) if o_m_l == 'limits' else cl[i]) # LL은 지정가이므로 슬리피지 제외
                 qty = np.floor((cash / ep) * p10 + 0.5) / p10
                 if qty > 0:
                     id_a[col] = 2; price_a[col] = ep; size_a[col] = qty
-                    return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=vbt.portfolio.nb.SizeType.Amount)
+                    return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=0)
             
     if pos > 0:
-        if use_tr and not np.isnan(trm[i]) and cl[i] < trm[i] and cl[i-1] >= trm[i-1]:
-            return vbt.portfolio.nb.order_nb(size=-pos, price=cl[i]-slip, size_type=vbt.portfolio.nb.SizeType.Amount)
-        ep = price_a[col]; cur_state = id_a[col]
+        cur_state = id_a[col]
+        if use_tr and cur_state == 1 and not np.isnan(trm[i]) and cl[i] < trm[i] and cl[i-1] >= trm[i-1]:
+            return vbt.portfolio.nb.order_nb(size=-pos, price=cl[i]-slip, size_type=0) # TR은 시장가이므로 슬리피지 적용
+        ep = price_a[col]
         if cur_state == 1: 
             tf, ta = ep*(1+tph), ep + tpm*atp[i]
             tpp = tf if tp_t=='Fixed' else (ta if tp_t=='ATR' else max(tf, ta))
@@ -191,17 +192,29 @@ def order_func_nb(c, o, h, l, cl, hlp_t, llp_t, atp, ats, trm,
             exit_mode = e_m_h
         else: 
             tpp, slp = ep*(1+tpl), ep*(1-sll); exit_mode = e_m_l
-        if np.isnan(tpp) or np.isnan(slp): return vbt.portfolio.nb.order_nothing_nb
+        if np.isnan(tpp) or np.isnan(slp): return vbt.portfolio.nb.order_nothing_nb()
         is_hit = (h[i] >= tpp or l[i] <= slp) if exit_mode == 'limits' else (cl[i] >= tpp or cl[i] <= slp)
         if is_hit:
-            exit_p = (tpp if h[i] >= tpp else slp) if exit_mode == 'limits' else cl[i]
-            if exit_mode == 'limits' and (o[i] >= tpp or o[i] <= slp): exit_p = o[i]
-            exit_p -= slip
-            if inst_num == 2 and pos > (np.floor((size_a[col] * 0.6) * p10 + 0.5) / p10):
-                return vbt.portfolio.nb.order_nb(size=-(np.floor((pos/2) * p10 + 0.5) / p10), price=exit_p, size_type=vbt.portfolio.nb.SizeType.Amount)
+            is_tp = False
+            if exit_mode == 'limits':
+                is_tp = (h[i] >= tpp)
+                exit_p = tpp if h[i] >= tpp else slp
+                if (o[i] >= tpp or o[i] <= slp): 
+                    exit_p = o[i]
+                    is_tp = (o[i] >= tpp)
             else:
-                return vbt.portfolio.nb.order_nb(size=-pos, price=exit_p, size_type=vbt.portfolio.nb.SizeType.Amount)
-    return vbt.portfolio.nb.order_nothing_nb
+                is_tp = (cl[i] >= tpp)
+                exit_p = cl[i]
+            
+            # 🚀 [V5.4] 지정가 익절(TP)일 경우 슬리피지 면제, 손절(SL)일 경우 적용
+            if not is_tp:
+                exit_p -= slip
+            
+            if inst_num == 2 and pos > (np.floor((size_a[col] * 0.6) * p10 + 0.5) / p10):
+                return vbt.portfolio.nb.order_nb(size=-(np.floor((pos/2) * p10 + 0.5) / p10), price=exit_p, size_type=0)
+            else:
+                return vbt.portfolio.nb.order_nb(size=-pos, price=exit_p, size_type=0)
+    return vbt.portfolio.nb.order_nothing_nb()
 
 # 시뮬레이션
 portfolio = vbt.Portfolio.from_order_func(
@@ -239,11 +252,13 @@ class UniversalMA(bt.Indicator):
         elif t == 'WMA': self.lines.ma = bt.indicators.WeightedMovingAverage(d, period=p)
         elif t == 'VWMA':
             try:
-                v = self.data._owner.volume if hasattr(self.data, '_owner') and hasattr(self.data._owner, 'volume') else self.data.volume
-                self.lines.ma = bt.indicators.SMA(d * v, period=p) / bt.indicators.SMA(v, period=p)
+                # 🚨 [V4.8] 볼륨 데이터의 안정적 접근 및 0 나누기 방어
+                v = self.data.volume
+                v_sma = bt.indicators.SMA(v, period=p)
+                safe_v_sma = bt.If(v_sma > 0, v_sma, 0.000001)
+                self.lines.ma = bt.indicators.SMA(d * v, period=p) / safe_v_sma
             except Exception:
-                v = self.data._owner.datas[0].volume
-                self.lines.ma = bt.indicators.SMA(d * v, period=p) / bt.indicators.SMA(v, period=p)
+                self.lines.ma = bt.indicators.SMA(d, period=p)
         else: self.lines.ma = bt.indicators.SMA(d, period=p)
 
 class HOTTIndicator(bt.Indicator):
@@ -258,13 +273,27 @@ class HOTTIndicator(bt.Indicator):
         ma = self.mavg[0]
         if math.isnan(ma): return
         fk = ma * self.p.percent * 0.01; ls, ss = ma - fk, ma + fk
-        if not hasattr(self, 'lsp'): self.lsp, self.ssp, self.dir = ls, ss, 1
-        mask = (ma > self.lsp)
-        if mask: self.lsp = max(ls, self.lsp)
-        mask_s = (ma < self.ssp)
-        if mask_s: self.ssp = min(ss, self.ssp)
-        if self.dir == -1 and ma > self.ssp: self.dir = 1
-        elif self.dir == 1 and ma < self.lsp: self.dir = -1
+        
+        # 🚨 [V4.8] Pine Script [1] 인덱싱(전일 데이터 참조) 방식 재현
+        if not hasattr(self, 'lsp'):
+            self.lsp, self.ssp, self.dir = ls, ss, 1
+            return # 첫 바는 초기화만 수행
+
+        prev_lsp, prev_ssp, prev_dir = self.lsp, self.ssp, self.dir
+        
+        # 1. 이전 값(Prev) 기반으로 방향(Dir) 결정
+        if prev_dir == -1 and ma > prev_ssp: new_dir = 1
+        elif prev_dir == 1 and ma < prev_lsp: new_dir = -1
+        else: new_dir = prev_dir
+        
+        # 2. 트레일링 스탑 갱신
+        new_lsp = max(ls, prev_lsp) if ma > prev_lsp else ls
+        new_ssp = min(ss, prev_ssp) if ma < prev_ssp else ss
+        
+        # 3. 객체 상태 업데이트
+        self.lsp, self.ssp, self.dir = new_lsp, new_ssp, new_dir
+        
+        # 4. 출력값 계산
         mt = self.lsp if self.dir == 1 else self.ssp
         self.lines.hott[0] = mt * (200 + self.p.percent) / 200 if ma > mt else mt * (200 - self.p.percent) / 200
 
@@ -282,42 +311,19 @@ class BBCustom(bt.Indicator):
 
 class TestStrategy(bt.Strategy):
     params = (
-        ('hl_price', optuna_trial.suggest_categorical('hl_price', ['BB', 'H/L OTT', 'MAX']) if 'optuna_trial' in globals() and optuna_trial else 'H/L OTT'),
-        ('open_at_hl', optuna_trial.suggest_categorical('open_at_hl', ['limits', 'close']) if 'optuna_trial' in globals() and optuna_trial else 'limits'),
-        ('open_at_ll', optuna_trial.suggest_categorical('open_at_ll', ['limits', 'close']) if 'optuna_trial' in globals() and optuna_trial else 'limits'),
-        ('exit_at_hl', optuna_trial.suggest_categorical('exit_at_hl', ['limits', 'close']) if 'optuna_trial' in globals() and optuna_trial else 'close'),
-        ('exit_at_ll', optuna_trial.suggest_categorical('exit_at_ll', ['limits', 'close']) if 'optuna_trial' in globals() and optuna_trial else 'limits'),
-        ('hl_tp_price', optuna_trial.suggest_categorical('hl_tp_price', ['Fixed', 'ATR', 'both']) if 'optuna_trial' in globals() and optuna_trial else 'ATR'),
-        ('hl_sl_price', optuna_trial.suggest_categorical('hl_sl_price', ['Fixed', 'ATR', 'both']) if 'optuna_trial' in globals() and optuna_trial else 'ATR'),
-        ('tr_hl', optuna_trial.suggest_categorical('tr_hl', [True, False]) if 'optuna_trial' in globals() and optuna_trial else True),
-        ('ll_volatility_filter', optuna_trial.suggest_categorical('ll_volatility_filter', [True, False]) if 'optuna_trial' in globals() and optuna_trial else False),
-        ('ma1_length', optuna_trial.suggest_int('ma1_length', 10, 50) if 'optuna_trial' in globals() and optuna_trial else 20),
-        ('ll_mult', optuna_trial.suggest_float('ll_mult', 1.0, 3.0, step=0.1) if 'optuna_trial' in globals() and optuna_trial else 1.5),
-        ('ma2_type', optuna_trial.suggest_categorical('ma2_type', ['SMA', 'EMA', 'SMMA (RMA)', 'WMA', 'VWMA']) if 'optuna_trial' in globals() and optuna_trial else 'EMA'),
-        ('ma2_length', optuna_trial.suggest_int('ma2_length', 1, 10) if 'optuna_trial' in globals() and optuna_trial else 3),
-        ('bb_ma_type', optuna_trial.suggest_categorical('bb_ma_type', ['SMA', 'EMA', 'SMMA (RMA)', 'WMA', 'VWMA']) if 'optuna_trial' in globals() and optuna_trial else 'EMA'),
-        ('bb_length', optuna_trial.suggest_int('bb_length', 10, 50) if 'optuna_trial' in globals() and optuna_trial else 20),
-        ('bb_dev', optuna_trial.suggest_float('bb_dev', 1.0, 3.0, step=0.1) if 'optuna_trial' in globals() and optuna_trial else 2.0),
-        ('bb_min_width', optuna_trial.suggest_float('bb_min_width', 1.0, 5.0, step=0.1) if 'optuna_trial' in globals() and optuna_trial else 3.0),
-        ('hott_ma_type', optuna_trial.suggest_categorical('hott_ma_type', ['SMA', 'EMA', 'SMMA (RMA)', 'WMA', 'VWMA']) if 'optuna_trial' in globals() and optuna_trial else 'EMA'),
-        ('hott_length', optuna_trial.suggest_int('hott_length', 1, 10) if 'optuna_trial' in globals() and optuna_trial else 2),
-        ('hott_percent', optuna_trial.suggest_float('hott_percent', 0.1, 2.0, step=0.1) if 'optuna_trial' in globals() and optuna_trial else 0.6),
-        ('hott_h_length', optuna_trial.suggest_int('hott_h_length', 50, 200) if 'optuna_trial' in globals() and optuna_trial else 100),
-        ('hott_use_high', optuna_trial.suggest_categorical('hott_use_high', [True, False]) if 'optuna_trial' in globals() and optuna_trial else False),
-        ('high_int', optuna_trial.suggest_int('high_int', 0, 1) if 'optuna_trial' in globals() and optuna_trial else 0),
-        ('entry_ll_per', optuna_trial.suggest_float('entry_ll_per', 0.02, 0.15, step=0.001) if 'optuna_trial' in globals() and optuna_trial else 0.06),
-        ('tp_hl_per', optuna_trial.suggest_float('tp_hl_per', 0.005, 0.05, step=0.001) if 'optuna_trial' in globals() and optuna_trial else 0.015),
-        ('sl_hl_per', optuna_trial.suggest_float('sl_hl_per', 0.01, 0.07, step=0.001) if 'optuna_trial' in globals() and optuna_trial else 0.02),
-        ('tp_ll_per', optuna_trial.suggest_float('tp_ll_per', 0.005, 0.05, step=0.001) if 'optuna_trial' in globals() and optuna_trial else 0.015),
-        ('sl_ll_per', optuna_trial.suggest_float('sl_ll_per', 0.01, 0.07, step=0.001) if 'optuna_trial' in globals() and optuna_trial else 0.015),
-        ('atr_length', optuna_trial.suggest_int('atr_length', 7, 20) if 'optuna_trial' in globals() and optuna_trial else 10),
-        ('atr_length2', optuna_trial.suggest_int('atr_length2', 7, 20) if 'optuna_trial' in globals() and optuna_trial else 10),
-        ('hl_tp_atr_mul', optuna_trial.suggest_float('hl_tp_atr_mul', 1.0, 6.0, step=0.1) if 'optuna_trial' in globals() and optuna_trial else 2.0),
-        ('hl_sl_atr_mul', optuna_trial.suggest_float('hl_sl_atr_mul', 1.0, 6.0, step=0.1) if 'optuna_trial' in globals() and optuna_trial else 4.0),
-        ('tr_ma_type', optuna_trial.suggest_categorical('tr_ma_type', ['SMA', 'EMA', 'SMMA (RMA)', 'WMA', 'VWMA']) if 'optuna_trial' in globals() and optuna_trial else 'EMA'),
-        ('tr_ma_length', optuna_trial.suggest_int('tr_ma_length', 50, 200) if 'optuna_trial' in globals() and optuna_trial else 100),
-        ('exchange_decimal', optuna_trial.suggest_int('exchange_decimal', 1, 8) if 'optuna_trial' in globals() and optuna_trial else 3),
-        ('installment', optuna_trial.suggest_categorical('installment', [1, 2]) if 'optuna_trial' in globals() and optuna_trial else 1),
+        ('hl_price', 'H/L OTT'), ('open_at_hl', 'limits'), ('open_at_ll', 'limits'),
+        ('exit_at_hl', 'close'), ('exit_at_ll', 'limits'),
+        ('hl_tp_price', 'both'), ('hl_sl_price', 'both'),
+        ('tr_hl', True), ('ll_volatility_filter', False),
+        ('ma1_length', 20), ('ll_mult', 1.5),
+        ('ma2_type', 'EMA'), ('ma2_length', 3),
+        ('bb_ma_type', 'EMA'), ('bb_length', 20), ('bb_dev', 2.0), ('bb_min_width', 3.0),
+        ('hott_ma_type', 'EMA'), ('hott_length', 2), ('hott_percent', 0.6), ('hott_h_length', 100), ('hott_use_high', False),
+        ('high_int', 0), ('entry_ll_per', 0.06),
+        ('tp_hl_per', 0.015), ('sl_hl_per', 0.02), ('tp_ll_per', 0.015), ('sl_ll_per', 0.015),
+        ('atr_length', 10), ('atr_length2', 10), ('hl_tp_atr_mul', 2.0), ('hl_sl_atr_mul', 4.0),
+        ('tr_ma_type', 'EMA'), ('tr_ma_length', 100),
+        ('exchange_decimal', 3), ('installment', 1),
     )
     def __init__(self):
         self.dataclose = self.datas[0].close; self.datahigh = self.datas[0].high; self.datalow = self.datas[0].low
@@ -330,7 +336,7 @@ class TestStrategy(bt.Strategy):
         self.hott = HOTTIndicator(self.datas[0], period=self.p.hott_h_length, length=self.p.hott_length, percent=self.p.hott_percent, use_high=self.p.hott_use_high, matype=self.p.hott_ma_type)
         self.tr_ma = UniversalMA(self.dataclose, period=self.p.tr_ma_length, matype=self.p.tr_ma_type)
         self.entry_id = None; self.partial_filled = False; self.tp_order = None; self.sl_order = None
-        self.pending_entry = None 
+        self.pending_orders = [] # 🚨 [V4.9] 단일 변수 대신 리스트로 다중 대기 주문 추적
         t_size = 10.0 ** -self.p.exchange_decimal
         self.broker.set_slippage_fixed(3.0 * t_size)
 
@@ -361,10 +367,16 @@ class TestStrategy(bt.Strategy):
                 q = math.ceil(raw_q * pow10) / pow10
                 self.issue_exit_orders(order.executed.price, self.get_qty(q))
             elif order.issell():
-                if self.position.size > 0: self.partial_filled = True
+                if self.position.size > 0:
+                    self.partial_filled = True
+                    # 🚀 [V5.2] 포지션이 남아있다면 잔여 물량에 대해 OCO 주문 재생성 (최초 진입가 기준)
+                    self.issue_exit_orders(self.position.price, self.position.size)
                 else: self.entry_id, self.partial_filled = None, False
-        elif order.status in [order.Canceled, order.Margin, order.Rejected]:
-            if order == self.pending_entry: self.pending_entry = None
+        
+        # 🚨 [V4.9] 어떤 상태에서든 주문이 종료되면 추적 리스트에서 제거
+        if order.status in [order.Completed, order.Canceled, order.Margin, order.Rejected]:
+            if order in self.pending_orders:
+                self.pending_orders.remove(order)
 
     def next(self):
         cur_cl = self.dataclose[0]
@@ -383,32 +395,80 @@ class TestStrategy(bt.Strategy):
                     raw_p = self.position.size if self.p.installment == 1 or self.partial_filled else math.ceil((self.position.size / 2)*pow10)/pow10
                     q = self.get_qty(raw_p)
                     self.sell(size=q); return
-            if self.p.tr_hl and not math.isnan(self.tr_ma[0]) and cur_cl < self.tr_ma[0] and self.dataclose[-1] >= self.tr_ma[-1]: self.close(); return
+            if self.p.tr_hl and self.entry_id == 'HL' and not math.isnan(self.tr_ma[0]) and cur_cl < self.tr_ma[0] and self.dataclose[-1] >= self.tr_ma[-1]:
+                self.close(); return
         if not self.position:
-            if self.pending_entry: self.cancel(self.pending_entry)
+            # 🚨 [V4.9] 매 봉마다 이전 대기 주문(전일 예약분) 일괄 취소 및 리스트 초기화
+            for o in self.pending_orders: self.cancel(o)
+            self.pending_orders.clear()
+
             h_v = self.hott.hott[0]; hlp = self.bb.top[0] if self.p.hl_price=='BB' else (h_v if self.p.hl_price=='H/L OTT' else max(h_v, self.bb.top[0]))
             llp = self.ma2[0]*(1 - self.ma1[0]*self.p.ll_mult - self.p.entry_ll_per) if self.p.ll_volatility_filter else self.ma2[0]*(1-self.p.entry_ll_per)
             if math.isnan(hlp) or math.isnan(llp): return
             
-            # 🚨 [V4.7] 비트코인 수량 증발 방지 로직 적용
             pow10 = 10 ** self.p.exchange_decimal
             q = self.get_qty(pine_round((self.broker.getvalue() / cur_cl) * pow10) / pow10)
             
+            # 🚨 [V4.9] if-elif 체인 해제: 돌파와 눌림 조건을 각각 독립적으로 평가
             if hlp > 0 and self.p.open_at_hl == 'limits':
                 adj_hlp = max(hlp, cur_cl * 1.0001)
-                # 🚨 [V4.7] 존재하지 않는 상수 bt.Order.DAY 삭제
                 o = self.buy(exectype=bt.Order.Stop, price=adj_hlp, size=q)
-                if o: o.info['id'] = 'HL'; self.pending_entry = o
-            elif llp > 0 and self.p.open_at_ll == 'limits':
+                if o: o.info['id'] = 'HL'; self.pending_orders.append(o)
+            
+            if llp > 0 and self.p.open_at_ll == 'limits':
                 adj_llp = min(llp, cur_cl * 0.9999)
                 o = self.buy(exectype=bt.Order.Limit, price=adj_llp, size=q)
-                if o: o.info['id'] = 'LL'; self.pending_entry = o
-            elif (self.p.open_at_hl == 'close' and cur_cl > hlp) or (self.p.open_at_ll == 'close' and cur_cl < llp):
+                if o: o.info['id'] = 'LL'; self.pending_orders.append(o)
+            
+            if (self.p.open_at_hl == 'close' and cur_cl > hlp) or (self.p.open_at_ll == 'close' and cur_cl < llp):
                 eid = 'HL' if cur_cl > hlp else 'LL'
                 o = self.buy(size=q)
-                if o: o.info['id'] = eid
+                if o: o.info['id'] = eid; self.pending_orders.append(o)
 
-cerebro = bt.Cerebro(); cerebro.addstrategy(TestStrategy); cerebro.adddata(bt.feeds.PandasData(dataname=data))
+cerebro = bt.Cerebro()
+if 'optuna_trial' in globals() and optuna_trial:
+    opt_kwargs = {
+        'hl_price': optuna_trial.suggest_categorical('hl_price', ['BB', 'H/L OTT', 'MAX']),
+        'open_at_hl': optuna_trial.suggest_categorical('open_at_hl', ['limits', 'close']),
+        'open_at_ll': optuna_trial.suggest_categorical('open_at_ll', ['limits', 'close']),
+        'exit_at_hl': optuna_trial.suggest_categorical('exit_at_hl', ['limits', 'close']),
+        'exit_at_ll': optuna_trial.suggest_categorical('exit_at_ll', ['limits', 'close']),
+        'hl_tp_price': optuna_trial.suggest_categorical('hl_tp_price', ['Fixed', 'ATR', 'both']),
+        'hl_sl_price': optuna_trial.suggest_categorical('hl_sl_price', ['Fixed', 'ATR', 'both']),
+        'tr_hl': optuna_trial.suggest_categorical('tr_hl', [True, False]),
+        'll_volatility_filter': optuna_trial.suggest_categorical('ll_volatility_filter', [True, False]),
+        'ma1_length': optuna_trial.suggest_int('ma1_len', 10, 50),
+        'll_mult': optuna_trial.suggest_float('ll_mult', 1.0, 3.0, step=0.1),
+        'ma2_type': optuna_trial.suggest_categorical('ma2_type', ['SMA', 'EMA', 'SMMA (RMA)', 'WMA', 'VWMA']),
+        'ma2_length': optuna_trial.suggest_int('ma2_len', 1, 10),
+        'bb_ma_type': optuna_trial.suggest_categorical('bb_ma_type', ['SMA', 'EMA', 'SMMA (RMA)', 'WMA', 'VWMA']),
+        'bb_length': optuna_trial.suggest_int('bb_length', 10, 50),
+        'bb_dev': optuna_trial.suggest_float('bb_dev', 1.0, 3.0, step=0.1),
+        'bb_min_width': optuna_trial.suggest_float('bb_min_width', 1.0, 5.0, step=0.1),
+        'hott_ma_type': optuna_trial.suggest_categorical('hott_ma_type', ['SMA', 'EMA', 'SMMA (RMA)', 'WMA', 'VWMA']),
+        'hott_length': optuna_trial.suggest_int('hott_length', 1, 10),
+        'hott_percent': optuna_trial.suggest_float('hott_percent', 0.1, 2.0, step=0.1),
+        'hott_h_length': optuna_trial.suggest_int('hott_h_length', 50, 200),
+        'hott_use_high': optuna_trial.suggest_categorical('hott_h_src', [True, False]),
+        'high_int': optuna_trial.suggest_int('high_int', 0, 5),
+        'entry_ll_per': optuna_trial.suggest_float('entry_ll_per', 0.02, 0.15, step=0.001),
+        'tp_hl_per': optuna_trial.suggest_float('tp_hl_per', 0.005, 0.05, step=0.001),
+        'sl_hl_per': optuna_trial.suggest_float('sl_hl_per', 0.01, 0.07, step=0.001),
+        'tp_ll_per': optuna_trial.suggest_float('tp_ll_per', 0.005, 0.05, step=0.001),
+        'sl_ll_per': optuna_trial.suggest_float('sl_ll_per', 0.01, 0.07, step=0.001),
+        'atr_length': optuna_trial.suggest_int('atr_length', 7, 20),
+        'atr_length2': optuna_trial.suggest_int('atr_length2', 7, 20),
+        'hl_tp_atr_mul': optuna_trial.suggest_float('hl_tp_atr_mul', 1.0, 6.0, step=0.1),
+        'hl_sl_atr_mul': optuna_trial.suggest_float('hl_sl_atr_mul', 1.0, 6.0, step=0.1),
+        'tr_ma_type': optuna_trial.suggest_categorical('tr_ma_type', ['SMA', 'EMA', 'SMMA (RMA)', 'WMA', 'VWMA']),
+        'tr_ma_length': optuna_trial.suggest_int('tr_ma_len', 50, 200),
+        'exchange_decimal': optuna_trial.suggest_int('exchange_decimal', 1, 8),
+        'installment': optuna_trial.suggest_categorical('installment', [1, 2])
+    }
+    cerebro.addstrategy(TestStrategy, **opt_kwargs)
+else:
+    cerebro.addstrategy(TestStrategy)
+cerebro.adddata(bt.feeds.PandasData(dataname=data))
 cerebro.broker.setcash(1000000.0); cerebro.broker.setcommission(commission=0.0008)
 cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name='trades'); cerebro.addanalyzer(bt.analyzers.DrawDown, _name='drawdown')
 results = cerebro.run()
