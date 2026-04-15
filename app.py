@@ -43,7 +43,7 @@ with st.sidebar:
     st.title("⚙️ Control Panel")
     eng = st.selectbox("엔진", ["Vectorbt", "Backtrader"], key="engine_sel")
     sym = st.text_input("심볼", "BTC/USDT")
-    tf = st.selectbox("주기", ["1h", "4h", "15m"])
+    tf = st.selectbox("주기", ["15m", "30m", "1h", "2h", "4h"])
     trials = st.number_input("탐색수", 10, 10000, 100)
     workers = st.number_input("워커 수 (병렬 엔진)", 2, 8, 4)
     
