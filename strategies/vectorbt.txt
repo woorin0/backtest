@@ -132,13 +132,21 @@ def calc_hott_nb(mavg_np, percent):
     return hott
 
 hott_v = calc_hott_nb(mavg_h_np, hott_per)
+
+# 🚀 [V6.0] hott_s 선언 위치 교정: calc_hott_nb 직후에 배치
+hott_s = np.full_like(hott_v, np.nan)
+if h_int > 0:
+    hott_s[h_int:] = hott_v[:-h_int]
+else:
+    hott_s = hott_v.copy()
+
 atr_tp = vbt.ATR.run(data['High'], data['Low'], data['Close'], window=atr_len).atr.values
 atr_sl = vbt.ATR.run(data['High'], data['Low'], data['Close'], window=atr_len2).atr.values
 ma1 = ((data['High'] - data['Low']) / data['Close'].replace(0, 0.0001)).rolling(ma1_len).mean().values
 ma2 = calc_ma_vbt(data['Close'], data['Volume'] if 'Volume' in data.columns else None, ma2_len, ma2_type)
 tr_ma = calc_ma_vbt(data['Close'], data['Volume'] if 'Volume' in data.columns else None, tr_ma_len, tr_ma_type)
 
-hl_p_triggers = (hott_v if hl_price_type == 'H/L OTT' else (bb_u if hl_price_type == 'BB' else np.maximum(hott_v, bb_u)))
+hl_p_triggers = (hott_s if hl_price_type == 'H/L OTT' else (bb_u if hl_price_type == 'BB' else np.maximum(hott_s, bb_u)))
 ll_p_triggers = (ma2 * (1 - ma1 * ll_mult - en_ll_per) if ll_vol_filter else ma2 * (1 - en_ll_per))
 
 # [상태 관리 및 엔진]
@@ -149,32 +157,32 @@ size_arr = np.zeros(num_cols, dtype=np.float64)
 
 @njit
 def order_func_nb(c, o, h, l, cl, hlp_t, llp_t, atp, ats, trm, 
-                  inst_num, use_tr, o_m_h, o_m_l, e_m_h, e_m_l, tp_t, sl_t, h_i, 
+                  inst_num, use_tr, o_m_h, o_m_l, e_m_h, e_m_l, tp_t, sl_t, 
                   tph, slh, tpl, sll, tpm, slm, slip_ticks, dec, 
                   id_a, price_a, size_a):
     
     i = c.i; col = c.col
-    # 🚨 [V4.7] 정확한 속성명 사용 (AttributeError 방지)
+    # 🚀 [V6.0] 첫 캔들 인덱스 오류(-1 참조) 방지 가드
+    if i < 1:
+        return vbt.portfolio.nb.order_nothing_nb()
+
     pos = c.position_now; cash = c.cash_now
     
     p10 = 10.0**dec; tick = 1.0/p10; slip = slip_ticks * tick
     
-    idx_h = i - 1 - h_i
-    if idx_h < 0: return vbt.portfolio.nb.order_nothing_nb()
-    hlp, llp = hlp_t[idx_h], llp_t[i-1]
-    
     if pos == 0:
         id_a[col] = 0; price_a[col] = 0.0; size_a[col] = 0.0
+        hlp, llp = hlp_t[i-1], llp_t[i-1]
         if not np.isnan(hlp) and hlp > 0:
-            if (h[i] > hlp if o_m_h == 'limits' else cl[i] > hlp):
-                ep = (max(o[i], hlp) if o_m_h == 'limits' else cl[i]) + slip # HL은 돌파이므로 슬리피지 적용
+            if (h[i] > hlp if o_m_h == 0 else cl[i] > hlp):
+                ep = (max(o[i], hlp) if o_m_h == 0 else cl[i]) + slip
                 qty = np.floor((cash / ep) * p10 + 0.5) / p10
                 if qty > 0:
                     id_a[col] = 1; price_a[col] = ep; size_a[col] = qty
                     return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=0)
         if not np.isnan(llp) and llp > 0:
-            if (l[i] < llp if o_m_l == 'limits' else cl[i] < llp):
-                ep = (min(o[i], llp) if o_m_l == 'limits' else cl[i] + slip) # [V5.7] Close 모드 시 슬리피지 강제 부과
+            if (l[i] < llp if o_m_l == 0 else cl[i] < llp):
+                ep = (min(o[i], llp) if o_m_l == 0 else cl[i] + slip)
                 qty = np.floor((cash / ep) * p10 + 0.5) / p10
                 if qty > 0:
                     id_a[col] = 2; price_a[col] = ep; size_a[col] = qty
@@ -183,21 +191,21 @@ def order_func_nb(c, o, h, l, cl, hlp_t, llp_t, atp, ats, trm,
     if pos > 0:
         cur_state = id_a[col]
         if use_tr and cur_state == 1 and not np.isnan(trm[i]) and cl[i] < trm[i] and cl[i-1] >= trm[i-1]:
-            return vbt.portfolio.nb.order_nb(size=-pos, price=cl[i]-slip, size_type=0) # TR은 시장가이므로 슬리피지 적용
+            return vbt.portfolio.nb.order_nb(size=-pos, price=cl[i]-slip, size_type=0)
         ep = price_a[col]
         if cur_state == 1: 
             tf, ta = ep*(1+tph), ep + tpm*atp[i]
-            tpp = tf if tp_t=='Fixed' else (ta if tp_t=='ATR' else max(tf, ta))
+            tpp = tf if tp_t==0 else (ta if tp_t==1 else max(tf, ta))
             sf, sa = ep*(1-slh), ep - slm*ats[i]
-            slp = sf if sl_t=='Fixed' else (sa if sl_t=='ATR' else max(sf, sa))
+            slp = sf if sl_t==0 else (sa if sl_t==1 else max(sf, sa))
             exit_mode = e_m_h
         else: 
             tpp, slp = ep*(1+tpl), ep*(1-sll); exit_mode = e_m_l
         if np.isnan(tpp) or np.isnan(slp): return vbt.portfolio.nb.order_nothing_nb()
-        is_hit = (h[i] >= tpp or l[i] <= slp) if exit_mode == 'limits' else (cl[i] >= tpp or cl[i] <= slp)
+        is_hit = (h[i] >= tpp or l[i] <= slp) if exit_mode == 0 else (cl[i] >= tpp or cl[i] <= slp)
         if is_hit:
             is_tp = False
-            if exit_mode == 'limits':
+            if exit_mode == 0:
                 is_tp = (h[i] >= tpp)
                 exit_p = tpp if h[i] >= tpp else slp
                 if (o[i] >= tpp or o[i] <= slp): 
@@ -207,8 +215,7 @@ def order_func_nb(c, o, h, l, cl, hlp_t, llp_t, atp, ats, trm,
                 is_tp = (cl[i] >= tpp)
                 exit_p = cl[i]
             
-            # 🚀 [V5.7] Close 모드(시장가)일 경우 무조건 슬리피지 부과, Limits 모드는 TP만 면제
-            if exit_mode != 'limits' or not is_tp:
+            if exit_mode != 0 or not is_tp:
                 exit_p -= slip
             
             if inst_num == 2 and pos > (np.ceil((size_a[col] * 0.6) * p10) / p10):
@@ -218,11 +225,17 @@ def order_func_nb(c, o, h, l, cl, hlp_t, llp_t, atp, ats, trm,
     return vbt.portfolio.nb.order_nothing_nb()
 
 # 시뮬레이션
+m_map = {'limits': 0, 'close': 1}
+t_map = {'Fixed': 0, 'ATR': 1, 'both': 2}
+o_h_m, o_l_m = m_map.get(o_m_hl, 0), m_map.get(o_m_ll, 0)
+e_h_m, e_l_m = m_map.get(e_m_hl, 0), m_map.get(e_m_ll, 0)
+tp_h_t, sl_h_t = t_map.get(tp_hl_type, 0), t_map.get(sl_hl_type, 0)
+
 vbt.settings.portfolio['fees'] = 0.0008
 portfolio = vbt.Portfolio.from_order_func(
     data['Close'], order_func_nb,
     o_np, h_np, l_np, c_np, hl_p_triggers, ll_p_triggers, atr_tp, atr_sl, tr_ma,
-    inst, tr_hl, o_m_hl, o_m_ll, e_m_hl, e_m_ll, tp_hl_type, sl_hl_type, h_int,
+    inst, tr_hl, o_h_m, o_l_m, e_h_m, e_l_m, tp_h_t, sl_h_t,
     tp_hl_per, sl_hl_per, tp_ll_per, sl_ll_per, hl_tp_atr_mul, hl_sl_atr_mul, slippage_ticks, ex_dec,
     id_arr, price_arr, size_arr,
     flexible=False, init_cash=1000000, cash_sharing=False
