@@ -12,31 +12,47 @@ def create_excel_report(study, data_df):
     # 상위 50개 선정
     top_trials = trials[:50]
     
+    # 2. 리포트 데이터 생성
     report_rows = []
     for t in top_trials:
-        # 기본 정보 (순위, 수익률)
+        # 기본 정보 (Rank 및 핵심 지표)
         row = {
             "Rank": len(report_rows) + 1,
-            "Total Return (%)": round(t.value, 2) if t.value is not None else 0.0
-        }
-        
-        # 사용자 속성 (Win Rate, MDD, Trades 등)
-        row.update({
+            "Total Return (%)": round(t.value, 2) if t.value is not None else 0.0,
             "Win Rate (%)": t.user_attrs.get("Win Rate (%)", 0.0),
             "MDD (%)": t.user_attrs.get("MDD (%)", 0.0),
             "Total Trades": t.user_attrs.get("Total Trades", 0),
-            "Total Profit ($)": t.user_attrs.get("Total Profit", 0.0)
-        })
+            "Total Profit ($)": t.user_attrs.get("Total Profit", 0.0),
+            "Total Fees ($)": round(t.user_attrs.get("Total Fees", 0.0), 2)
+        }
         
         # 전략 파라미터 (Params)
         row.update(t.params)
-        
         report_rows.append(row)
     
-    # 데이터프레임 변환
+    # 3. 데이터프레임 변환 및 컬럼 순서 재배치 (Pine Script 순서 동기화)
     report_df = pd.DataFrame(report_rows)
     
-    # 바이트 스트림으로 저장
+    # 파인스크립트 소스코드와 동일한 논리적 정렬 순서 정의
+    PINE_ORDER = [
+        "Rank", "Total Return (%)", "Win Rate (%)", "MDD (%)", "Total Trades", "Total Profit ($)", "Total Fees ($)", # 기본 지표
+        "hl_price", "bb_ma_type", "bb_length", "bb_dev", "bb_min_width",       # Indicator Group 1
+        "hott_ma_type", "hott_length", "hott_percent", "hott_h_length", "hott_h_src", "high_int", # Indicator Group 2
+        "hl_tp_atr_mul", "hl_sl_atr_mul", "open_at_hl", "open_at_ll",           # Strategy Group 1
+        "exit_at_hl", "exit_at_ll", "hl_tp_price", "hl_sl_price",               # Strategy Group 2
+        "ma2_type", "ma2_len", "ma1_len", "tr_ma_type", "tr_ma_len",            # MA Group
+        "atr_length", "atr_length2", "ll_mult", "ll_volatility_filter",         # ATR/Filter Group
+        "entry_ll_per", "tp_hl_per", "sl_hl_per", "tp_ll_per", "sl_ll_per",     # Trigger Group
+        "exchange_decimal", "installment", "tr_hl"                             # System Group
+    ]
+    
+    # 존재하는 컬럼만 필터링하여 순서 적용 (엔진별 파라미터 차이 대응)
+    final_columns = [col for col in PINE_ORDER if col in report_df.columns]
+    # 명시되지 않은 나머지 컬럼이 있다면 뒤에 붙임
+    remaining_columns = [col for col in report_df.columns if col not in PINE_ORDER]
+    report_df = report_df[final_columns + remaining_columns]
+    
+    # 4. 바이트 스트림으로 저장
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         report_df.to_excel(writer, sheet_name='Top_50_Strategies', index=False)

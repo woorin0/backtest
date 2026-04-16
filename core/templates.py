@@ -175,14 +175,16 @@ if 'JIT_COMPILED_ORDER' not in globals():
                 if (h[i] > hlp if o_m_h == 0 else cl[i] > hlp): 
                     # 🚀 [V5.9] HL(돌파)은 Stop 주문 성격이므로 무조건 슬리피지(+slip) 부과
                     ep = (max(o[i], hlp) if o_m_h == 0 else cl[i]) + slip
-                    qty = np.floor((cash / ep) * p10 + 0.5) / p10
+                    # 🚀 [V7.0] 수수료(0.08%) 및 여유분 고려하여 현금의 99.1%만 매수 (초과 지출 방지)
+                    qty = np.floor((cash * 0.991 / ep) * p10 + 0.5) / p10
                     if qty > 0:
                         id_a[col] = 1; price_a[col] = ep; size_a[col] = qty
                         return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=0)
             if not np.isnan(llp) and llp > 0:
                 if (l[i] < llp if o_m_l == 0 else cl[i] < llp):
                     ep = (min(o[i], llp) if o_m_l == 0 else cl[i] + slip)
-                    qty = np.floor((cash / ep) * p10 + 0.5) / p10
+                    # 🚀 [V7.0] 수수료 고려 99.1% 비율 적용
+                    qty = np.floor((cash * 0.991 / ep) * p10 + 0.5) / p10
                     if qty > 0:
                         id_a[col] = 2; price_a[col] = ep; size_a[col] = qty
                         return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=0)
@@ -205,8 +207,16 @@ if 'JIT_COMPILED_ORDER' not in globals():
             if is_hit:
                 is_tp = False
                 if exit_mode == 0:
-                    is_tp = (h[i] >= tpp)
-                    exit_p = tpp if h[i] >= tpp else slp
+                    # 🚀 [V7.0] 충돌 해결: 동일 봉 내 TP/SL 동시 도달 시 시가(Open)에서 더 가까운 쪽 우선 체결
+                    if h[i] >= tpp and l[i] <= slp:
+                        dist_tp = abs(o[i] - tpp)
+                        dist_sl = abs(o[i] - slp)
+                        is_tp = (dist_tp < dist_sl) # TP가 더 가까우면 승리
+                    else:
+                        is_tp = (h[i] >= tpp)
+                    
+                    exit_p = tpp if is_tp else slp
+                    # 시가 갭(Gap) 처리
                     if (o[i] >= tpp or o[i] <= slp): 
                         exit_p = o[i]
                         is_tp = (o[i] >= tpp)
@@ -261,7 +271,8 @@ metrics = {
     "Win Rate (%)": round(np.nan_to_num(float(stats.get('Win Rate [%]', 0.0))), 2),
     "MDD (%)": round(np.nan_to_num(float(portfolio.max_drawdown() * 100.0)), 2),
     "Total Trades": int(portfolio.trades.count()),
-    "Total Profit": round(np.nan_to_num(float(portfolio.total_profit())), 2)
+    "Total Profit": round(np.nan_to_num(float(portfolio.total_profit())), 2),
+    "Total Fees": round(np.nan_to_num(float(portfolio.total_fees())), 2)
 }
 """
 
@@ -512,5 +523,5 @@ if results:
     total_tr = t_info.total.total if 'total' in t_info else 0
     if total_tr > 0 and 'won' in t_info: win_rate = round((t_info.won.total / total_tr) * 100, 2)
     if 'max' in d_info and 'drawdown' in d_info.max: mdd = round(d_info.max.drawdown, 2)
-metrics = {"Total Return (%)": round(ret_pct,2), "Total Profit": round(total_prof, 2), "Win Rate (%)": win_rate, "MDD (%)": mdd, "Total Trades": total_tr}
+metrics = {"Total Return (%)": round(ret_pct,2), "Total Profit": round(total_prof, 2), "Win Rate (%)": win_rate, "MDD (%)": mdd, "Total Trades": total_tr, "Total Fees": round(sum([order.executed.comm for order in strat.broker.orders if order.status == order.Completed]), 2)}
 """
