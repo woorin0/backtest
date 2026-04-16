@@ -9,106 +9,109 @@ import datetime
 
 def pine_round(x): return math.floor(x + 0.5)
 
-class UniversalMA(bt.Indicator):
-    lines = ('ma',)
-    params = (('period', 20), ('matype', 'SMA'))
-    def __init__(self):
-        t = self.p.matype; p = self.p.period; d = self.data
-        if t == 'SMA': self.lines.ma = bt.indicators.SMA(d, period=p)
-        elif t == 'EMA': self.lines.ma = bt.indicators.EMA(d, period=p)
-        elif t == 'SMMA (RMA)': self.lines.ma = bt.indicators.SmoothedMovingAverage(d, period=p)
-        elif t == 'WMA': self.lines.ma = bt.indicators.WeightedMovingAverage(d, period=p)
-        elif t == 'VWMA':
-            try:
-                # 🚨 [V4.8] 볼륨 데이터의 안정적 접근 및 0 나누기 방어
-                v = self.data.volume
-                v_sma = bt.indicators.SMA(v, period=p)
-                safe_v_sma = bt.If(v_sma > 0, v_sma, 0.000001)
-                self.lines.ma = bt.indicators.SMA(d * v, period=p) / safe_v_sma
-            except Exception:
-                self.lines.ma = bt.indicators.SMA(d, period=p)
-        else: self.lines.ma = bt.indicators.SMA(d, period=p)
+# [메모리 누수 방지] 클래스 전역 스코프 유지 및 재정의 차단 (OOM 방어)
+if 'BT_CLASSES_LOADED' not in globals():
+    class UniversalMA(bt.Indicator):
+        lines = ('ma',)
+        params = (('period', 20), ('matype', 'SMA'))
+        def __init__(self):
+            t = self.p.matype; p = self.p.period; d = self.data
+            if t == 'SMA': self.lines.ma = bt.indicators.SMA(d, period=p)
+            elif t == 'EMA': self.lines.ma = bt.indicators.EMA(d, period=p)
+            elif t == 'SMMA (RMA)': self.lines.ma = bt.indicators.SmoothedMovingAverage(d, period=p)
+            elif t == 'WMA': self.lines.ma = bt.indicators.WeightedMovingAverage(d, period=p)
+            elif t == 'VWMA':
+                try:
+                    # 🚨 [V4.8] 볼륨 데이터의 안정적 접근 및 0 나누기 방어
+                    v = self.data.volume
+                    v_sma = bt.indicators.SMA(v, period=p)
+                    safe_v_sma = bt.If(v_sma > 0, v_sma, 0.000001)
+                    self.lines.ma = bt.indicators.SMA(d * v, period=p) / safe_v_sma
+                except Exception:
+                    self.lines.ma = bt.indicators.SMA(d, period=p)
+            else: self.lines.ma = bt.indicators.SMA(d, period=p)
 
-class HOTTIndicator(bt.Indicator):
-    lines = ('hott',)
-    params = (('period', 100), ('length', 2), ('percent', 0.6), ('use_high', False), ('matype', 'EMA'))
-    def __init__(self):
-        src = self.data.high if self.p.use_high else self.data.close
-        h_val = bt.indicators.Highest(src, period=self.p.period)
-        self.mavg = UniversalMA(h_val, period=self.p.length, matype=self.p.matype)
-        self.addminperiod(self.p.period + self.p.length + 5)
-    def next(self):
-        ma = self.mavg[0]
-        if math.isnan(ma): return
-        fk = ma * self.p.percent * 0.01; ls, ss = ma - fk, ma + fk
-        
-        # 🚨 [V4.8] Pine Script [1] 인덱싱(전일 데이터 참조) 방식 재현
-        if not hasattr(self, 'lsp'):
-            self.lsp, self.ssp, self.dir = ls, ss, 1
-            return # 첫 바는 초기화만 수행
+    class HOTTIndicator(bt.Indicator):
+        lines = ('hott',)
+        params = (('period', 100), ('length', 2), ('percent', 0.6), ('use_high', False), ('matype', 'EMA'))
+        def __init__(self):
+            src = self.data.high if self.p.use_high else self.data.close
+            h_val = bt.indicators.Highest(src, period=self.p.period)
+            self.mavg = UniversalMA(h_val, period=self.p.length, matype=self.p.matype)
+            self.addminperiod(self.p.period + self.p.length + 5)
+        def next(self):
+            ma = self.mavg[0]
+            if math.isnan(ma): return
+            fk = ma * self.p.percent * 0.01; ls, ss = ma - fk, ma + fk
+            
+            # 🚨 [V4.8] Pine Script [1] 인덱싱(전일 데이터 참조) 방식 재현
+            if not hasattr(self, 'lsp'):
+                self.lsp, self.ssp, self.dir = ls, ss, 1
+                return # 첫 바는 초기화만 수행
 
-        prev_lsp, prev_ssp, prev_dir = self.lsp, self.ssp, self.dir
-        
-        # 1. 이전 값(Prev) 기반으로 방향(Dir) 결정
-        if prev_dir == -1 and ma > prev_ssp: new_dir = 1
-        elif prev_dir == 1 and ma < prev_lsp: new_dir = -1
-        else: new_dir = prev_dir
-        
-        # 2. 트레일링 스탑 갱신 (Trailing Stop 업데이트는 방향 전환 로직 이후에 수행)
-        new_lsp = max(ls, prev_lsp) if ma > prev_lsp else ls
-        new_ssp = min(ss, prev_ssp) if ma < prev_ssp else ss
-        
-        # 3. 객체 상태 업데이트
-        self.lsp, self.ssp, self.dir = new_lsp, new_ssp, new_dir
-        
-        # 4. 출력값 계산
-        mt = self.lsp if self.dir == 1 else self.ssp
-        self.lines.hott[0] = mt * (200 + self.p.percent) / 200 if ma > mt else mt * (200 - self.p.percent) / 200
+            prev_lsp, prev_ssp, prev_dir = self.lsp, self.ssp, self.dir
+            
+            # 1. 이전 값(Prev) 기반으로 방향(Dir) 결정
+            if prev_dir == -1 and ma > prev_ssp: new_dir = 1
+            elif prev_dir == 1 and ma < prev_lsp: new_dir = -1
+            else: new_dir = prev_dir
+            
+            # 2. 트레일링 스탑 갱신 (Trailing Stop 업데이트는 방향 전환 로직 이후에 수행)
+            new_lsp = max(ls, prev_lsp) if ma > prev_lsp else ls
+            new_ssp = min(ss, prev_ssp) if ma < prev_ssp else ss
+            
+            # 3. 객체 상태 업데이트
+            self.lsp, self.ssp, self.dir = new_lsp, new_ssp, new_dir
+            
+            # 4. 출력값 계산
+            mt = self.lsp if self.dir == 1 else self.ssp
+            self.lines.hott[0] = mt * (200 + self.p.percent) / 200 if ma > mt else mt * (200 - self.p.percent) / 200
 
-class BBCustom(bt.Indicator):
-    lines = ('mid', 'top', 'bot')
-    params = (('period', 20), ('dev', 2.0), ('min_width', 3.0), ('matype', 'EMA'))
-    def __init__(self):
-        self.mid_ma = UniversalMA(self.data, period=self.p.period, matype=self.p.matype)
-        self.stddev = bt.indicators.StdDev(self.data.close if hasattr(self.data, 'close') else self.data, period=self.p.period)
-    def next(self):
-        mid = self.mid_ma[0]; std = self.stddev[0] * self.p.dev
-        if math.isnan(mid) or math.isnan(std): return
-        lbbdev = max(std, mid * self.p.min_width / 100.0)
-        self.lines.mid[0] = mid; self.lines.top[0] = mid + lbbdev; self.lines.bot[0] = mid - lbbdev
+    class BBCustom(bt.Indicator):
+        lines = ('mid', 'top', 'bot')
+        params = (('period', 20), ('dev', 2.0), ('min_width', 3.0), ('matype', 'EMA'))
+        def __init__(self):
+            self.mid_ma = UniversalMA(self.data, period=self.p.period, matype=self.p.matype)
+            self.stddev = bt.indicators.StdDev(self.data.close if hasattr(self.data, 'close') else self.data, period=self.p.period)
+        def next(self):
+            mid = self.mid_ma[0]; std = self.stddev[0] * self.p.dev
+            if math.isnan(mid) or math.isnan(std): return
+            lbbdev = max(std, mid * self.p.min_width / 100.0)
+            self.lines.mid[0] = mid; self.lines.top[0] = mid + lbbdev; self.lines.bot[0] = mid - lbbdev
 
-class TestStrategy(bt.Strategy):
-    params = (
-        ('hl_price', 'H/L OTT'), ('open_at_hl', 'limits'), ('open_at_ll', 'limits'),
-        ('exit_at_hl', 'close'), ('exit_at_ll', 'limits'),
-        ('hl_tp_price', 'both'), ('hl_sl_price', 'both'),
-        ('tr_hl', True), ('ll_volatility_filter', False),
-        ('ma1_length', 20), ('ll_mult', 1.5),
-        ('ma2_type', 'EMA'), ('ma2_length', 3),
-        ('bb_ma_type', 'EMA'), ('bb_length', 20), ('bb_dev', 2.0), ('bb_min_width', 3.0),
-        ('hott_ma_type', 'EMA'), ('hott_length', 2), ('hott_percent', 0.6), ('hott_h_length', 100), ('hott_use_high', False),
-        ('high_int', 0), ('entry_ll_per', 0.06),
-        ('tp_hl_per', 0.015), ('sl_hl_per', 0.02), ('tp_ll_per', 0.015), ('sl_ll_per', 0.015),
-        ('atr_length', 10), ('atr_length2', 10), ('hl_tp_atr_mul', 2.0), ('hl_sl_atr_mul', 4.0),
-        ('tr_ma_type', 'EMA'), ('tr_ma_length', 100),
-        ('exchange_decimal', 3), ('installment', 1),
-    )
-    def __init__(self):
-        self.dataclose = self.datas[0].close; self.datahigh = self.datas[0].high; self.datalow = self.datas[0].low
-        self.atr_tp = bt.indicators.ATR(self.datas[0], period=self.p.atr_length)
-        self.atr_sl = bt.indicators.ATR(self.datas[0], period=self.p.atr_length2)
-        safe_close = bt.If(self.dataclose > 0, self.dataclose, 0.000001)
-        self.ma1 = bt.indicators.SMA((self.datahigh - self.datalow) / safe_close, period=self.p.ma1_length)
-        self.ma2 = UniversalMA(self.datas[0], period=self.p.ma2_length, matype=self.p.ma2_type)
-        self.bb = BBCustom(period=self.p.bb_length, dev=self.p.bb_dev, min_width=self.p.bb_min_width, matype=self.p.bb_ma_type)
-        self.hott = HOTTIndicator(self.datas[0], period=self.p.hott_h_length, length=self.p.hott_length, percent=self.p.hott_percent, use_high=self.p.hott_use_high, matype=self.p.hott_ma_type)
-        self.tr_ma = UniversalMA(self.dataclose, period=self.p.tr_ma_length, matype=self.p.tr_ma_type)
-        self.entry_id = None; self.partial_filled = False; self.tp_order = None; self.sl_order = None
-        self.pending_orders = [] # 🚨 [V4.9] 단일 변수 대신 리스트로 다중 대기 주문 추적
-        t_size = 10.0 ** -self.p.exchange_decimal
-        self.broker.set_slippage_fixed(3.0 * t_size)
+    class TestStrategy(bt.Strategy):
+        params = (
+            ('hl_price', 'H/L OTT'), ('open_at_hl', 'limits'), ('open_at_ll', 'limits'),
+            ('exit_at_hl', 'close'), ('exit_at_ll', 'limits'),
+            ('hl_tp_price', 'both'), ('hl_sl_price', 'both'),
+            ('tr_hl', True), ('ll_volatility_filter', False),
+            ('ma1_length', 20), ('ll_mult', 1.5),
+            ('ma2_type', 'EMA'), ('ma2_length', 3),
+            ('bb_ma_type', 'EMA'), ('bb_length', 20), ('bb_dev', 2.0), ('bb_min_width', 3.0),
+            ('hott_ma_type', 'EMA'), ('hott_length', 2), ('hott_percent', 0.6), ('hott_h_length', 100), ('hott_use_high', False),
+            ('high_int', 0), ('entry_ll_per', 0.06),
+            ('tp_hl_per', 0.015), ('sl_hl_per', 0.02), ('tp_ll_per', 0.015), ('sl_ll_per', 0.015),
+            ('atr_length', 10), ('atr_length2', 10), ('hl_tp_atr_mul', 2.0), ('hl_sl_atr_mul', 4.0),
+            ('tr_ma_type', 'EMA'), ('tr_ma_length', 100),
+            ('exchange_decimal', 3), ('installment', 1),
+        )
+        def __init__(self):
+            self.dataclose = self.datas[0].close; self.datahigh = self.datas[0].high; self.datalow = self.datas[0].low
+            self.atr_tp = bt.indicators.ATR(self.datas[0], period=self.p.atr_length)
+            self.atr_sl = bt.indicators.ATR(self.datas[0], period=self.p.atr_length2)
+            safe_close = bt.If(self.dataclose > 0, self.dataclose, 0.000001)
+            self.ma1 = bt.indicators.SMA((self.datahigh - self.datalow) / safe_close, period=self.p.ma1_length)
+            self.ma2 = UniversalMA(self.datas[0], period=self.p.ma2_length, matype=self.p.ma2_type)
+            self.bb = BBCustom(period=self.p.bb_length, dev=self.p.bb_dev, min_width=self.p.bb_min_width, matype=self.p.bb_ma_type)
+            self.hott = HOTTIndicator(self.datas[0], period=self.p.hott_h_length, length=self.p.hott_length, percent=self.p.hott_percent, use_high=self.p.hott_use_high, matype=self.p.hott_ma_type)
+            self.tr_ma = UniversalMA(self.dataclose, period=self.p.tr_ma_length, matype=self.p.tr_ma_type)
+            self.entry_id = None; self.partial_filled = False; self.tp_order = None; self.sl_order = None
+            self.pending_orders = [] # 🚨 [V4.9] 단일 변수 대신 리스트로 다중 대기 주문 추적
+            t_size = 10.0 ** -self.p.exchange_decimal
+            self.broker.set_slippage_fixed(3.0 * t_size)
 
-    def get_qty(self, val): return math.floor(val * (10**self.p.exchange_decimal)) / (10.0**self.p.exchange_decimal)
+        def get_qty(self, val): return math.floor(val * (10**self.p.exchange_decimal)) / (10.0**self.p.exchange_decimal)
+    globals()['BT_CLASSES_LOADED'] = True
 
     def issue_exit_orders(self, bp, size):
         exit_mode = self.p.exit_at_hl if self.entry_id == 'HL' else self.p.exit_at_ll

@@ -9,69 +9,73 @@ import math
 # Vectorbt Hardened Fix - AttributeError & JIT 완결
 # ==========================================
 
-# [지표 엔진: NaN-Safe]
-@njit
-def n_sma(s, l):
-    res = np.full(len(s), np.nan)
-    for i in range(len(s)):
-        if i < l - 1: continue
-        v_sum = 0.0; count = 0
-        for j in range(i - l + 1, i + 1):
-            if not np.isnan(s[j]): v_sum += s[j]; count += 1
-        if count == l: res[i] = v_sum / l
-    return res
+# [메모리 누수 방지] Numba JIT 컴파일 결과를 캐싱하여 반복 재컴파일(OOM) 원천 차단
+if 'JIT_COMPILED' not in globals():
+    # [지표 엔진: NaN-Safe]
+    @njit
+    def n_sma(s, l):
+        res = np.full(len(s), np.nan)
+        for i in range(len(s)):
+            if i < l - 1: continue
+            v_sum = 0.0; count = 0
+            for j in range(i - l + 1, i + 1):
+                if not np.isnan(s[j]): v_sum += s[j]; count += 1
+            if count == l: res[i] = v_sum / l
+        return res
 
-@njit
-def n_ema(s, l):
-    res = np.full(len(s), np.nan); alpha = 2.0 / (l + 1.0); last_val = np.nan
-    for i in range(len(s)):
-        if np.isnan(s[i]): continue
-        if np.isnan(last_val): 
-            res[i] = s[i]; last_val = s[i]
-        else:
-            res[i] = alpha * s[i] + (1.0 - alpha) * last_val
-            last_val = res[i]
-    return res
+    @njit
+    def n_ema(s, l):
+        res = np.full(len(s), np.nan); alpha = 2.0 / (l + 1.0); last_val = np.nan
+        for i in range(len(s)):
+            if np.isnan(s[i]): continue
+            if np.isnan(last_val): 
+                res[i] = s[i]; last_val = s[i]
+            else:
+                res[i] = alpha * s[i] + (1.0 - alpha) * last_val
+                last_val = res[i]
+        return res
 
-@njit
-def n_rma(s, l):
-    res = np.full(len(s), np.nan); alpha = 1.0 / l; last_val = np.nan
-    for i in range(len(s)):
-        if np.isnan(s[i]): continue
-        if np.isnan(last_val):
-            res[i] = s[i]; last_val = s[i]
-        else:
-            res[i] = alpha * s[i] + (1.0 - alpha) * last_val
-            last_val = res[i]
-    return res
+    @njit
+    def n_rma(s, l):
+        res = np.full(len(s), np.nan); alpha = 1.0 / l; last_val = np.nan
+        for i in range(len(s)):
+            if np.isnan(s[i]): continue
+            if np.isnan(last_val):
+                res[i] = s[i]; last_val = s[i]
+            else:
+                res[i] = alpha * s[i] + (1.0 - alpha) * last_val
+                last_val = res[i]
+        return res
 
-@njit
-def n_wma(s, l):
-    res = np.full(len(s), np.nan); w_sum = (l * (l + 1)) / 2
-    for i in range(len(s)):
-        if i < l - 1: continue
-        dot_p = 0.0; valid = True
-        for j in range(l):
-            val = s[i - l + 1 + j]
-            if np.isnan(val): 
-                valid = False; break
-            dot_p += val * (j + 1)
-        if valid: res[i] = dot_p / w_sum
-    return res
+    @njit
+    def n_wma(s, l):
+        res = np.full(len(s), np.nan); w_sum = (l * (l + 1)) / 2
+        for i in range(len(s)):
+            if i < l - 1: continue
+            dot_p = 0.0; valid = True
+            for j in range(l):
+                val = s[i - l + 1 + j]
+                if np.isnan(val): 
+                    valid = False; break
+                dot_p += val * (j + 1)
+            if valid: res[i] = dot_p / w_sum
+        return res
 
-@njit
-def n_vwma(c_p, v_p, l):
-    cv = c_p * v_p
-    res_cv = n_sma(cv, l); res_v = n_sma(v_p, l)
-    return res_cv / res_v
+    @njit
+    def n_vwma(c_p, v_p, l):
+        cv = c_p * v_p
+        res_cv = n_sma(cv, l); res_v = n_sma(v_p, l)
+        return res_cv / res_v
 
-def calc_ma_vbt(s, v, l, t):
-    if t == 'SMA': return n_sma(s.values, l)
-    elif t == 'EMA': return n_ema(s.values, l)
-    elif t == 'SMMA (RMA)': return n_rma(s.values, l)
-    elif t == 'WMA': return n_wma(s.values, l)
-    elif t == 'VWMA': return n_vwma(s.values, v.values if v is not None else np.ones(len(s)), l)
-    return n_sma(s.values, l)
+    def calc_ma_vbt(s, v, l, t):
+        if t == 'SMA': return n_sma(s.values, l)
+        elif t == 'EMA': return n_ema(s.values, l)
+        elif t == 'SMMA (RMA)': return n_rma(s.values, l)
+        elif t == 'WMA': return n_wma(s.values, l)
+        elif t == 'VWMA': return n_vwma(s.values, v.values if v is not None else np.ones(len(s)), l)
+        return n_sma(s.values, l)
+    
+    globals()['JIT_COMPILED'] = True
 
 # [데이터 로드]
 c_np, h_np, l_np, o_np = data['Close'].values, data['High'].values, data['Low'].values, data['Open'].values
@@ -115,21 +119,23 @@ h_src = data['High'] if hott_h_src == 'High' else data['Close']
 mavg_h_pre = h_src.rolling(hott_h_len).max()
 mavg_h_np = calc_ma_vbt(mavg_h_pre, data['Volume'] if 'Volume' in data.columns else None, hott_len, hott_ma_type)
 
-@njit
-def calc_hott_nb(mavg_np, percent):
-    n = len(mavg_np); hott = np.full(n, np.nan); lsp, ssp, dv = np.nan, np.nan, 1
-    for i in range(n):
-        ma = mavg_np[i]
-        if np.isnan(ma): continue
-        fk = ma * percent * 0.01; ls, ss = ma - fk, ma + fk
-        if np.isnan(lsp): lsp, ssp = ls, ss; continue
-        if ma > lsp: lsp = max(ls, lsp)
-        if ma < ssp: ssp = min(ss, ssp)
-        if dv == -1 and ma > ssp: dv = 1
-        elif dv == 1 and ma < lsp: dv = -1
-        mt = lsp if dv == 1 else ssp
-        hott[i] = mt * (200 + percent) / 200 if ma > mt else mt * (200 - percent) / 200
-    return hott
+if 'JIT_COMPILED_HOTT' not in globals():
+    @njit
+    def calc_hott_nb(mavg_np, percent):
+        n = len(mavg_np); hott = np.full(n, np.nan); lsp, ssp, dv = np.nan, np.nan, 1
+        for i in range(n):
+            ma = mavg_np[i]
+            if np.isnan(ma): continue
+            fk = ma * percent * 0.01; ls, ss = ma - fk, ma + fk
+            if np.isnan(lsp): lsp, ssp = ls, ss; continue
+            if ma > lsp: lsp = max(ls, lsp)
+            if ma < ssp: ssp = min(ss, ssp)
+            if dv == -1 and ma > ssp: dv = 1
+            elif dv == 1 and ma < lsp: dv = -1
+            mt = lsp if dv == 1 else ssp
+            hott[i] = mt * (200 + percent) / 200 if ma > mt else mt * (200 - percent) / 200
+        return hott
+    globals()['JIT_COMPILED_HOTT'] = True
 
 hott_v = calc_hott_nb(mavg_h_np, hott_per)
 
@@ -155,74 +161,76 @@ id_arr = np.zeros(num_cols, dtype=np.int32)
 price_arr = np.zeros(num_cols, dtype=np.float64)
 size_arr = np.zeros(num_cols, dtype=np.float64)
 
-@njit
-def order_func_nb(c, o, h, l, cl, hlp_t, llp_t, atp, ats, trm, 
-                  inst_num, use_tr, o_m_h, o_m_l, e_m_h, e_m_l, tp_t, sl_t, 
-                  tph, slh, tpl, sll, tpm, slm, slip_ticks, dec, 
-                  id_a, price_a, size_a):
-    
-    i = c.i; col = c.col
-    # 🚀 [V6.0] 첫 캔들 인덱스 오류(-1 참조) 방지 가드
-    if i < 1:
-        return vbt.portfolio.nb.order_nothing_nb()
+if 'JIT_COMPILED_ORDER' not in globals():
+    @njit
+    def order_func_nb(c, o, h, l, cl, hlp_t, llp_t, atp, ats, trm, 
+                      inst_num, use_tr, o_m_h, o_m_l, e_m_h, e_m_l, tp_t, sl_t, 
+                      tph, slh, tpl, sll, tpm, slm, slip_ticks, dec, 
+                      id_a, price_a, size_a):
+        
+        i = c.i; col = c.col
+        # 🚀 [V6.0] 첫 캔들 인덱스 오류(-1 참조) 방지 가드
+        if i < 1:
+            return vbt.portfolio.nb.order_nothing_nb()
 
-    pos = c.position_now; cash = c.cash_now
-    
-    p10 = 10.0**dec; tick = 1.0/p10; slip = slip_ticks * tick
-    
-    if pos == 0:
-        id_a[col] = 0; price_a[col] = 0.0; size_a[col] = 0.0
-        hlp, llp = hlp_t[i-1], llp_t[i-1]
-        if not np.isnan(hlp) and hlp > 0:
-            if (h[i] > hlp if o_m_h == 0 else cl[i] > hlp):
-                ep = (max(o[i], hlp) if o_m_h == 0 else cl[i]) + slip
-                qty = np.floor((cash / ep) * p10 + 0.5) / p10
-                if qty > 0:
-                    id_a[col] = 1; price_a[col] = ep; size_a[col] = qty
-                    return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=0)
-        if not np.isnan(llp) and llp > 0:
-            if (l[i] < llp if o_m_l == 0 else cl[i] < llp):
-                ep = (min(o[i], llp) if o_m_l == 0 else cl[i] + slip)
-                qty = np.floor((cash / ep) * p10 + 0.5) / p10
-                if qty > 0:
-                    id_a[col] = 2; price_a[col] = ep; size_a[col] = qty
-                    return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=0)
-            
-    if pos > 0:
-        cur_state = id_a[col]
-        if use_tr and cur_state == 1 and not np.isnan(trm[i]) and cl[i] < trm[i] and cl[i-1] >= trm[i-1]:
-            return vbt.portfolio.nb.order_nb(size=-pos, price=cl[i]-slip, size_type=0)
-        ep = price_a[col]
-        if cur_state == 1: 
-            tf, ta = ep*(1+tph), ep + tpm*atp[i]
-            tpp = tf if tp_t==0 else (ta if tp_t==1 else max(tf, ta))
-            sf, sa = ep*(1-slh), ep - slm*ats[i]
-            slp = sf if sl_t==0 else (sa if sl_t==1 else max(sf, sa))
-            exit_mode = e_m_h
-        else: 
-            tpp, slp = ep*(1+tpl), ep*(1-sll); exit_mode = e_m_l
-        if np.isnan(tpp) or np.isnan(slp): return vbt.portfolio.nb.order_nothing_nb()
-        is_hit = (h[i] >= tpp or l[i] <= slp) if exit_mode == 0 else (cl[i] >= tpp or cl[i] <= slp)
-        if is_hit:
-            is_tp = False
-            if exit_mode == 0:
-                is_tp = (h[i] >= tpp)
-                exit_p = tpp if h[i] >= tpp else slp
-                if (o[i] >= tpp or o[i] <= slp): 
-                    exit_p = o[i]
-                    is_tp = (o[i] >= tpp)
-            else:
-                is_tp = (cl[i] >= tpp)
-                exit_p = cl[i]
-            
-            if exit_mode != 0 or not is_tp:
-                exit_p -= slip
-            
-            if inst_num == 2 and pos > (np.ceil((size_a[col] * 0.6) * p10) / p10):
-                return vbt.portfolio.nb.order_nb(size=-(np.ceil((pos/2) * p10) / p10), price=exit_p, size_type=0)
-            else:
-                return vbt.portfolio.nb.order_nb(size=-pos, price=exit_p, size_type=0)
-    return vbt.portfolio.nb.order_nothing_nb()
+        pos = c.position_now; cash = c.cash_now
+        
+        p10 = 10.0**dec; tick = 1.0/p10; slip = slip_ticks * tick
+        
+        if pos == 0:
+            id_a[col] = 0; price_a[col] = 0.0; size_a[col] = 0.0
+            hlp, llp = hlp_t[i-1], llp_t[i-1]
+            if not np.isnan(hlp) and hlp > 0:
+                if (h[i] > hlp if o_m_h == 0 else cl[i] > hlp):
+                    ep = (max(o[i], hlp) if o_m_h == 0 else cl[i]) + slip
+                    qty = np.floor((cash / ep) * p10 + 0.5) / p10
+                    if qty > 0:
+                        id_a[col] = 1; price_a[col] = ep; size_a[col] = qty
+                        return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=0)
+            if not np.isnan(llp) and llp > 0:
+                if (l[i] < llp if o_m_l == 0 else cl[i] < llp):
+                    ep = (min(o[i], llp) if o_m_l == 0 else cl[i] + slip)
+                    qty = np.floor((cash / ep) * p10 + 0.5) / p10
+                    if qty > 0:
+                        id_a[col] = 2; price_a[col] = ep; size_a[col] = qty
+                        return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=0)
+                
+        if pos > 0:
+            cur_state = id_a[col]
+            if use_tr and cur_state == 1 and not np.isnan(trm[i]) and cl[i] < trm[i] and cl[i-1] >= trm[i-1]:
+                return vbt.portfolio.nb.order_nb(size=-pos, price=cl[i]-slip, size_type=0)
+            ep = price_a[col]
+            if cur_state == 1: 
+                tf, ta = ep*(1+tph), ep + tpm*atp[i]
+                tpp = tf if tp_t==0 else (ta if tp_t==1 else max(tf, ta))
+                sf, sa = ep*(1-slh), ep - slm*ats[i]
+                slp = sf if sl_t==0 else (sa if sl_t==1 else max(sf, sa))
+                exit_mode = e_m_h
+            else: 
+                tpp, slp = ep*(1+tpl), ep*(1-sll); exit_mode = e_m_l
+            if np.isnan(tpp) or np.isnan(slp): return vbt.portfolio.nb.order_nothing_nb()
+            is_hit = (h[i] >= tpp or l[i] <= slp) if exit_mode == 0 else (cl[i] >= tpp or cl[i] <= slp)
+            if is_hit:
+                is_tp = False
+                if exit_mode == 0:
+                    is_tp = (h[i] >= tpp)
+                    exit_p = tpp if h[i] >= tpp else slp
+                    if (o[i] >= tpp or o[i] <= slp): 
+                        exit_p = o[i]
+                        is_tp = (o[i] >= tpp)
+                else:
+                    is_tp = (cl[i] >= tpp)
+                    exit_p = cl[i]
+                
+                if exit_mode != 0 or not is_tp:
+                    exit_p -= slip
+                
+                if inst_num == 2 and pos > (np.ceil((size_a[col] * 0.6) * p10) / p10):
+                    return vbt.portfolio.nb.order_nb(size=-(np.ceil((pos/2) * p10) / p10), price=exit_p, size_type=0)
+                else:
+                    return vbt.portfolio.nb.order_nb(size=-pos, price=exit_p, size_type=0)
+        return vbt.portfolio.nb.order_nothing_nb()
+    globals()['JIT_COMPILED_ORDER'] = True
 
 # 시뮬레이션
 m_map = {'limits': 0, 'close': 1}

@@ -6,70 +6,74 @@ import numpy as np
 from numba import njit
 import math
 
-# [지표 엔진: NaN-Safe]
-@njit
-def n_sma(s, l):
-    res = np.full(len(s), np.nan)
-    for i in range(len(s)):
-        if i < l - 1: continue
-        valid_sum = 0.0; count = 0
-        for j in range(i - l + 1, i + 1):
-            if not np.isnan(s[j]):
-                valid_sum += s[j]; count += 1
-        if count == l: res[i] = valid_sum / l
-    return res
+# [메모리 누수 방지] Numba JIT 컴파일 결과를 캐싱하여 반복 재컴파일(OOM) 원천 차단
+if 'JIT_COMPILED' not in globals():
+    # [지표 엔진: NaN-Safe]
+    @njit
+    def n_sma(s, l):
+        res = np.full(len(s), np.nan)
+        for i in range(len(s)):
+            if i < l - 1: continue
+            valid_sum = 0.0; count = 0
+            for j in range(i - l + 1, i + 1):
+                if not np.isnan(s[j]):
+                    valid_sum += s[j]; count += 1
+            if count == l: res[i] = valid_sum / l
+        return res
 
-@njit
-def n_ema(s, l):
-    res = np.full(len(s), np.nan); alpha = 2.0 / (l + 1.0); last_val = np.nan
-    for i in range(len(s)):
-        if np.isnan(s[i]): continue
-        if np.isnan(last_val): 
-            res[i] = s[i]; last_val = s[i]
-        else:
-            res[i] = alpha * s[i] + (1.0 - alpha) * last_val
-            last_val = res[i]
-    return res
+    @njit
+    def n_ema(s, l):
+        res = np.full(len(s), np.nan); alpha = 2.0 / (l + 1.0); last_val = np.nan
+        for i in range(len(s)):
+            if np.isnan(s[i]): continue
+            if np.isnan(last_val): 
+                res[i] = s[i]; last_val = s[i]
+            else:
+                res[i] = alpha * s[i] + (1.0 - alpha) * last_val
+                last_val = res[i]
+        return res
 
-@njit
-def n_rma(s, l):
-    res = np.full(len(s), np.nan); alpha = 1.0 / l; last_val = np.nan
-    for i in range(len(s)):
-        if np.isnan(s[i]): continue
-        if np.isnan(last_val):
-            res[i] = s[i]; last_val = s[i]
-        else:
-            res[i] = alpha * s[i] + (1.0 - alpha) * last_val
-            last_val = res[i]
-    return res
+    @njit
+    def n_rma(s, l):
+        res = np.full(len(s), np.nan); alpha = 1.0 / l; last_val = np.nan
+        for i in range(len(s)):
+            if np.isnan(s[i]): continue
+            if np.isnan(last_val):
+                res[i] = s[i]; last_val = s[i]
+            else:
+                res[i] = alpha * s[i] + (1.0 - alpha) * last_val
+                last_val = res[i]
+        return res
 
-@njit
-def n_wma(s, l):
-    res = np.full(len(s), np.nan); w_sum = (l * (l + 1)) / 2
-    for i in range(len(s)):
-        if i < l - 1: continue
-        dot_p = 0.0; valid = True
-        for j in range(l):
-            val = s[i - l + 1 + j]
-            if np.isnan(val): 
-                valid = False; break
-            dot_p += val * (j + 1)
-        if valid: res[i] = dot_p / w_sum
-    return res
+    @njit
+    def n_wma(s, l):
+        res = np.full(len(s), np.nan); w_sum = (l * (l + 1)) / 2
+        for i in range(len(s)):
+            if i < l - 1: continue
+            dot_p = 0.0; valid = True
+            for j in range(l):
+                val = s[i - l + 1 + j]
+                if np.isnan(val): 
+                    valid = False; break
+                dot_p += val * (j + 1)
+            if valid: res[i] = dot_p / w_sum
+        return res
 
-@njit
-def n_vwma(c_p, v_p, l):
-    cv = c_p * v_p
-    res_cv = n_sma(cv, l); res_v = n_sma(v_p, l)
-    return res_cv / res_v
+    @njit
+    def n_vwma(c_p, v_p, l):
+        cv = c_p * v_p
+        res_cv = n_sma(cv, l); res_v = n_sma(v_p, l)
+        return res_cv / res_v
 
-def calc_ma_vbt(s, v, l, t):
-    if t == 'SMA': return n_sma(s.values, l)
-    elif t == 'EMA': return n_ema(s.values, l)
-    elif t == 'SMMA (RMA)': return n_rma(s.values, l)
-    elif t == 'WMA': return n_wma(s.values, l)
-    elif t == 'VWMA': return n_vwma(s.values, v.values if v is not None else np.ones(len(s)), l)
-    return n_sma(s.values, l)
+    def calc_ma_vbt(s, v, l, t):
+        if t == 'SMA': return n_sma(s.values, l)
+        elif t == 'EMA': return n_ema(s.values, l)
+        elif t == 'SMMA (RMA)': return n_rma(s.values, l)
+        elif t == 'WMA': return n_wma(s.values, l)
+        elif t == 'VWMA': return n_vwma(s.values, v.values if v is not None else np.ones(len(s)), l)
+        return n_sma(s.values, l)
+    
+    globals()['JIT_COMPILED_MA'] = True
 
 # [데이터 로드]
 c_np, h_np, l_np, o_np = data['Close'].values, data['High'].values, data['Low'].values, data['Open'].values
@@ -114,21 +118,23 @@ h_src = data['High'] if hott_h_src == 'High' else data['Close']
 mavg_h_pre = h_src.rolling(hott_h_len).max()
 mavg_h_np = calc_ma_vbt(mavg_h_pre, data['Volume'] if 'Volume' in data.columns else None, hott_len, hott_ma_type)
 
-@njit
-def calc_hott_nb(mavg_np, percent):
-    n = len(mavg_np); hott = np.full(n, np.nan); lsp, ssp, dv = np.nan, np.nan, 1
-    for i in range(n):
-        ma = mavg_np[i]
-        if np.isnan(ma): continue
-        fk = ma * percent * 0.01; ls, ss = ma - fk, ma + fk
-        if np.isnan(lsp): lsp, ssp = ls, ss; continue
-        if ma > lsp: lsp = max(ls, lsp)
-        if ma < ssp: ssp = min(ss, ssp)
-        if dv == -1 and ma > ssp: dv = 1
-        elif dv == 1 and ma < lsp: dv = -1
-        mt = lsp if dv == 1 else ssp
-        hott[i] = mt * (200 + percent) / 200 if ma > mt else mt * (200 - percent) / 200
-    return hott
+if 'JIT_COMPILED_HOTT' not in globals():
+    @njit
+    def calc_hott_nb(mavg_np, percent):
+        n = len(mavg_np); hott = np.full(n, np.nan); lsp, ssp, dv = np.nan, np.nan, 1
+        for i in range(n):
+            ma = mavg_np[i]
+            if np.isnan(ma): continue
+            fk = ma * percent * 0.01; ls, ss = ma - fk, ma + fk
+            if np.isnan(lsp): lsp, ssp = ls, ss; continue
+            if ma > lsp: lsp = max(ls, lsp)
+            if ma < ssp: ssp = min(ss, ssp)
+            if dv == -1 and ma > ssp: dv = 1
+            elif dv == 1 and ma < lsp: dv = -1
+            mt = lsp if dv == 1 else ssp
+            hott[i] = mt * (200 + percent) / 200 if ma > mt else mt * (200 - percent) / 200
+        return hott
+    globals()['JIT_COMPILED_HOTT'] = True
 
 hott_v = calc_hott_nb(mavg_h_np, hott_per)
 atr_tp = vbt.ATR.run(data['High'], data['Low'], data['Close'], window=atr_len).atr.values
@@ -145,76 +151,78 @@ id_arr = np.zeros(num_cols, dtype=np.int32)
 price_arr = np.zeros(num_cols, dtype=np.float64)
 size_arr = np.zeros(num_cols, dtype=np.float64)
 
-@njit
-def order_func_nb(c, o, h, l, cl, hlp_t, llp_t, atp, ats, trm, 
-                  inst_num, use_tr, o_m_h, o_m_l, e_m_h, e_m_l, tp_t, sl_t,
-                  tph, slh, tpl, sll, tpm, slm, slip_ticks, dec, 
-                  id_a, price_a, size_a):
-    
-    i = c.i; col = c.col
-    # 🚀 [V6.0] 첫 캔들 인덱스 오류(-1 참조) 방지 가드
-    if i < 1:
-        return vbt.portfolio.nb.order_nothing_nb()
-
-    pos = c.position_now; cash = c.cash_now
-    
-    p10 = 10.0**dec; tick = 1.0/p10; slip = slip_ticks * tick
-    
-    if pos == 0:
-        id_a[col] = 0; price_a[col] = 0.0; size_a[col] = 0.0
-        hlp = hlp_t[i-1]; llp = llp_t[i-1]
+if 'JIT_COMPILED_ORDER' not in globals():
+    @njit
+    def order_func_nb(c, o, h, l, cl, hlp_t, llp_t, atp, ats, trm, 
+                      inst_num, use_tr, o_m_h, o_m_l, e_m_h, e_m_l, tp_t, sl_t,
+                      tph, slh, tpl, sll, tpm, slm, slip_ticks, dec, 
+                      id_a, price_a, size_a):
         
-        if not np.isnan(hlp) and hlp > 0:
-            if (h[i] > hlp if o_m_h == 0 else cl[i] > hlp): 
-                # 🚀 [V5.9] HL(돌파)은 Stop 주문 성격이므로 무조건 슬리피지(+slip) 부과
-                ep = (max(o[i], hlp) if o_m_h == 0 else cl[i]) + slip
-                qty = np.floor((cash / ep) * p10 + 0.5) / p10
-                if qty > 0:
-                    id_a[col] = 1; price_a[col] = ep; size_a[col] = qty
-                    return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=0)
-        if not np.isnan(llp) and llp > 0:
-            if (l[i] < llp if o_m_l == 0 else cl[i] < llp):
-                ep = (min(o[i], llp) if o_m_l == 0 else cl[i] + slip)
-                qty = np.floor((cash / ep) * p10 + 0.5) / p10
-                if qty > 0:
-                    id_a[col] = 2; price_a[col] = ep; size_a[col] = qty
-                    return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=0)
+        i = c.i; col = c.col
+        # 🚀 [V6.0] 첫 캔들 인덱스 오류(-1 참조) 방지 가드
+        if i < 1:
+            return vbt.portfolio.nb.order_nothing_nb()
+
+        pos = c.position_now; cash = c.cash_now
+        
+        p10 = 10.0**dec; tick = 1.0/p10; slip = slip_ticks * tick
+        
+        if pos == 0:
+            id_a[col] = 0; price_a[col] = 0.0; size_a[col] = 0.0
+            hlp = hlp_t[i-1]; llp = llp_t[i-1]
             
-    if pos > 0:
-        cur_state = id_a[col]
-        if use_tr and cur_state == 1 and not np.isnan(trm[i]) and cl[i] < trm[i] and cl[i-1] >= trm[i-1]:
-            return vbt.portfolio.nb.order_nb(size=-pos, price=cl[i]-slip, size_type=0)
-        ep = price_a[col]
-        if cur_state == 1: 
-            tf, ta = ep*(1+tph), ep + tpm*atp[i]
-            tpp = tf if tp_t==0 else (ta if tp_t==1 else max(tf, ta))
-            sf, sa = ep*(1-slh), ep - slm*ats[i]
-            slp = sf if sl_t==0 else (sa if sl_t==1 else max(sf, sa))
-            exit_mode = e_m_h
-        else: 
-            tpp, slp = ep*(1+tpl), ep*(1-sll); exit_mode = e_m_l
-        if np.isnan(tpp) or np.isnan(slp): return vbt.portfolio.nb.order_nothing_nb()
-        is_hit = (h[i] >= tpp or l[i] <= slp) if exit_mode == 0 else (cl[i] >= tpp or cl[i] <= slp)
-        if is_hit:
-            is_tp = False
-            if exit_mode == 0:
-                is_tp = (h[i] >= tpp)
-                exit_p = tpp if h[i] >= tpp else slp
-                if (o[i] >= tpp or o[i] <= slp): 
-                    exit_p = o[i]
-                    is_tp = (o[i] >= tpp)
-            else:
-                is_tp = (cl[i] >= tpp)
-                exit_p = cl[i]
-            
-            if exit_mode != 0 or not is_tp:
-                exit_p -= slip
-            
-            if inst_num == 2 and pos > (np.ceil((size_a[col] * 0.6) * p10) / p10):
-                return vbt.portfolio.nb.order_nb(size=-(np.ceil((pos/2) * p10) / p10), price=exit_p, size_type=0)
-            else:
-                return vbt.portfolio.nb.order_nb(size=-pos, price=exit_p, size_type=0)
-    return vbt.portfolio.nb.order_nothing_nb()
+            if not np.isnan(hlp) and hlp > 0:
+                if (h[i] > hlp if o_m_h == 0 else cl[i] > hlp): 
+                    # 🚀 [V5.9] HL(돌파)은 Stop 주문 성격이므로 무조건 슬리피지(+slip) 부과
+                    ep = (max(o[i], hlp) if o_m_h == 0 else cl[i]) + slip
+                    qty = np.floor((cash / ep) * p10 + 0.5) / p10
+                    if qty > 0:
+                        id_a[col] = 1; price_a[col] = ep; size_a[col] = qty
+                        return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=0)
+            if not np.isnan(llp) and llp > 0:
+                if (l[i] < llp if o_m_l == 0 else cl[i] < llp):
+                    ep = (min(o[i], llp) if o_m_l == 0 else cl[i] + slip)
+                    qty = np.floor((cash / ep) * p10 + 0.5) / p10
+                    if qty > 0:
+                        id_a[col] = 2; price_a[col] = ep; size_a[col] = qty
+                        return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=0)
+                
+        if pos > 0:
+            cur_state = id_a[col]
+            if use_tr and cur_state == 1 and not np.isnan(trm[i]) and cl[i] < trm[i] and cl[i-1] >= trm[i-1]:
+                return vbt.portfolio.nb.order_nb(size=-pos, price=cl[i]-slip, size_type=0)
+            ep = price_a[col]
+            if cur_state == 1: 
+                tf, ta = ep*(1+tph), ep + tpm*atp[i]
+                tpp = tf if tp_t==0 else (ta if tp_t==1 else max(tf, ta))
+                sf, sa = ep*(1-slh), ep - slm*ats[i]
+                slp = sf if sl_t==0 else (sa if sl_t==1 else max(sf, sa))
+                exit_mode = e_m_h
+            else: 
+                tpp, slp = ep*(1+tpl), ep*(1-sll); exit_mode = e_m_l
+            if np.isnan(tpp) or np.isnan(slp): return vbt.portfolio.nb.order_nothing_nb()
+            is_hit = (h[i] >= tpp or l[i] <= slp) if exit_mode == 0 else (cl[i] >= tpp or cl[i] <= slp)
+            if is_hit:
+                is_tp = False
+                if exit_mode == 0:
+                    is_tp = (h[i] >= tpp)
+                    exit_p = tpp if h[i] >= tpp else slp
+                    if (o[i] >= tpp or o[i] <= slp): 
+                        exit_p = o[i]
+                        is_tp = (o[i] >= tpp)
+                else:
+                    is_tp = (cl[i] >= tpp)
+                    exit_p = cl[i]
+                
+                if exit_mode != 0 or not is_tp:
+                    exit_p -= slip
+                
+                if inst_num == 2 and pos > (np.ceil((size_a[col] * 0.6) * p10) / p10):
+                    return vbt.portfolio.nb.order_nb(size=-(np.ceil((pos/2) * p10) / p10), price=exit_p, size_type=0)
+                else:
+                    return vbt.portfolio.nb.order_nb(size=-pos, price=exit_p, size_type=0)
+        return vbt.portfolio.nb.order_nothing_nb()
+    globals()['JIT_COMPILED_ORDER'] = True
 
 # 시뮬레이션
 # 🚀 [V6.0] hott_s 선언 위치 교정: calc_hott_nb 직후에 배치
@@ -263,106 +271,109 @@ import datetime
 
 def pine_round(x): return math.floor(x + 0.5)
 
-class UniversalMA(bt.Indicator):
-    lines = ('ma',)
-    params = (('period', 20), ('matype', 'SMA'))
-    def __init__(self):
-        t = self.p.matype; p = self.p.period; d = self.data
-        if t == 'SMA': self.lines.ma = bt.indicators.SMA(d, period=p)
-        elif t == 'EMA': self.lines.ma = bt.indicators.EMA(d, period=p)
-        elif t == 'SMMA (RMA)': self.lines.ma = bt.indicators.SmoothedMovingAverage(d, period=p)
-        elif t == 'WMA': self.lines.ma = bt.indicators.WeightedMovingAverage(d, period=p)
-        elif t == 'VWMA':
-            try:
-                # 🚨 [V4.8] 볼륨 데이터의 안정적 접근 및 0 나누기 방어
-                v = self.data.volume
-                v_sma = bt.indicators.SMA(v, period=p)
-                safe_v_sma = bt.If(v_sma > 0, v_sma, 0.000001)
-                self.lines.ma = bt.indicators.SMA(d * v, period=p) / safe_v_sma
-            except Exception:
-                self.lines.ma = bt.indicators.SMA(d, period=p)
-        else: self.lines.ma = bt.indicators.SMA(d, period=p)
+# [메모리 누수 방지] 클래스 전역 스코프 유지 및 재정의 차단 (OOM 방어)
+if 'BT_CLASSES_LOADED' not in globals():
+    class UniversalMA(bt.Indicator):
+        lines = ('ma',)
+        params = (('period', 20), ('matype', 'SMA'))
+        def __init__(self):
+            t = self.p.matype; p = self.p.period; d = self.data
+            if t == 'SMA': self.lines.ma = bt.indicators.SMA(d, period=p)
+            elif t == 'EMA': self.lines.ma = bt.indicators.EMA(d, period=p)
+            elif t == 'SMMA (RMA)': self.lines.ma = bt.indicators.SmoothedMovingAverage(d, period=p)
+            elif t == 'WMA': self.lines.ma = bt.indicators.WeightedMovingAverage(d, period=p)
+            elif t == 'VWMA':
+                try:
+                    # 🚨 [V4.8] 볼륨 데이터의 안정적 접근 및 0 나누기 방어
+                    v = self.data.volume
+                    v_sma = bt.indicators.SMA(v, period=p)
+                    safe_v_sma = bt.If(v_sma > 0, v_sma, 0.000001)
+                    self.lines.ma = bt.indicators.SMA(d * v, period=p) / safe_v_sma
+                except Exception:
+                    self.lines.ma = bt.indicators.SMA(d, period=p)
+            else: self.lines.ma = bt.indicators.SMA(d, period=p)
 
-class HOTTIndicator(bt.Indicator):
-    lines = ('hott',)
-    params = (('period', 100), ('length', 2), ('percent', 0.6), ('use_high', False), ('matype', 'EMA'))
-    def __init__(self):
-        src = self.data.high if self.p.use_high else self.data.close
-        h_val = bt.indicators.Highest(src, period=self.p.period)
-        self.mavg = UniversalMA(h_val, period=self.p.length, matype=self.p.matype)
-        self.addminperiod(self.p.period + self.p.length + 5)
-    def next(self):
-        ma = self.mavg[0]
-        if math.isnan(ma): return
-        fk = ma * self.p.percent * 0.01; ls, ss = ma - fk, ma + fk
-        
-        # 🚨 [V4.8] Pine Script [1] 인덱싱(전일 데이터 참조) 방식 재현
-        if not hasattr(self, 'lsp'):
-            self.lsp, self.ssp, self.dir = ls, ss, 1
-            return # 첫 바는 초기화만 수행
+    class HOTTIndicator(bt.Indicator):
+        lines = ('hott',)
+        params = (('period', 100), ('length', 2), ('percent', 0.6), ('use_high', False), ('matype', 'EMA'))
+        def __init__(self):
+            src = self.data.high if self.p.use_high else self.data.close
+            h_val = bt.indicators.Highest(src, period=self.p.period)
+            self.mavg = UniversalMA(h_val, period=self.p.length, matype=self.p.matype)
+            self.addminperiod(self.p.period + self.p.length + 5)
+        def next(self):
+            ma = self.mavg[0]
+            if math.isnan(ma): return
+            fk = ma * self.p.percent * 0.01; ls, ss = ma - fk, ma + fk
+            
+            # 🚨 [V4.8] Pine Script [1] 인덱싱(전일 데이터 참조) 방식 재현
+            if not hasattr(self, 'lsp'):
+                self.lsp, self.ssp, self.dir = ls, ss, 1
+                return # 첫 바는 초기화만 수행
 
-        prev_lsp, prev_ssp, prev_dir = self.lsp, self.ssp, self.dir
-        
-        # 1. 이전 값(Prev) 기반으로 방향(Dir) 결정
-        if prev_dir == -1 and ma > prev_ssp: new_dir = 1
-        elif prev_dir == 1 and ma < prev_lsp: new_dir = -1
-        else: new_dir = prev_dir
-        
-        # 2. 트레일링 스탑 갱신
-        new_lsp = max(ls, prev_lsp) if ma > prev_lsp else ls
-        new_ssp = min(ss, prev_ssp) if ma < prev_ssp else ss
-        
-        # 3. 객체 상태 업데이트
-        self.lsp, self.ssp, self.dir = new_lsp, new_ssp, new_dir
-        
-        # 4. 출력값 계산
-        mt = self.lsp if self.dir == 1 else self.ssp
-        self.lines.hott[0] = mt * (200 + self.p.percent) / 200 if ma > mt else mt * (200 - self.p.percent) / 200
+            prev_lsp, prev_ssp, prev_dir = self.lsp, self.ssp, self.dir
+            
+            # 1. 이전 값(Prev) 기반으로 방향(Dir) 결정
+            if prev_dir == -1 and ma > prev_ssp: new_dir = 1
+            elif prev_dir == 1 and ma < prev_lsp: new_dir = -1
+            else: new_dir = prev_dir
+            
+            # 2. 트레일링 스탑 갱신
+            new_lsp = max(ls, prev_lsp) if ma > prev_lsp else ls
+            new_ssp = min(ss, prev_ssp) if ma < prev_ssp else ss
+            
+            # 3. 객체 상태 업데이트
+            self.lsp, self.ssp, self.dir = new_lsp, new_ssp, new_dir
+            
+            # 4. 출력값 계산
+            mt = self.lsp if self.dir == 1 else self.ssp
+            self.lines.hott[0] = mt * (200 + self.p.percent) / 200 if ma > mt else mt * (200 - self.p.percent) / 200
 
-class BBCustom(bt.Indicator):
-    lines = ('mid', 'top', 'bot')
-    params = (('period', 20), ('dev', 2.0), ('min_width', 3.0), ('matype', 'EMA'))
-    def __init__(self):
-        self.mid_ma = UniversalMA(self.data, period=self.p.period, matype=self.p.matype)
-        self.stddev = bt.indicators.StdDev(self.data.close if hasattr(self.data, 'close') else self.data, period=self.p.period)
-    def next(self):
-        mid = self.mid_ma[0]; std = self.stddev[0] * self.p.dev
-        if math.isnan(mid) or math.isnan(std): return
-        lbbdev = max(std, mid * self.p.min_width / 100.0)
-        self.lines.mid[0] = mid; self.lines.top[0] = mid + lbbdev; self.lines.bot[0] = mid - lbbdev
+    class BBCustom(bt.Indicator):
+        lines = ('mid', 'top', 'bot')
+        params = (('period', 20), ('dev', 2.0), ('min_width', 3.0), ('matype', 'EMA'))
+        def __init__(self):
+            self.mid_ma = UniversalMA(self.data, period=self.p.period, matype=self.p.matype)
+            self.stddev = bt.indicators.StdDev(self.data.close if hasattr(self.data, 'close') else self.data, period=self.p.period)
+        def next(self):
+            mid = self.mid_ma[0]; std = self.stddev[0] * self.p.dev
+            if math.isnan(mid) or math.isnan(std): return
+            lbbdev = max(std, mid * self.p.min_width / 100.0)
+            self.lines.mid[0] = mid; self.lines.top[0] = mid + lbbdev; self.lines.bot[0] = mid - lbbdev
 
-class TestStrategy(bt.Strategy):
-    params = (
-        ('hl_price', 'H/L OTT'), ('open_at_hl', 'limits'), ('open_at_ll', 'limits'),
-        ('exit_at_hl', 'close'), ('exit_at_ll', 'limits'),
-        ('hl_tp_price', 'both'), ('hl_sl_price', 'both'),
-        ('tr_hl', True), ('ll_volatility_filter', False),
-        ('ma1_length', 20), ('ll_mult', 1.5),
-        ('ma2_type', 'EMA'), ('ma2_length', 3),
-        ('bb_ma_type', 'EMA'), ('bb_length', 20), ('bb_dev', 2.0), ('bb_min_width', 3.0),
-        ('hott_ma_type', 'EMA'), ('hott_length', 2), ('hott_percent', 0.6), ('hott_h_length', 100), ('hott_use_high', False),
-        ('high_int', 0), ('entry_ll_per', 0.06),
-        ('tp_hl_per', 0.015), ('sl_hl_per', 0.02), ('tp_ll_per', 0.015), ('sl_ll_per', 0.015),
-        ('atr_length', 10), ('atr_length2', 10), ('hl_tp_atr_mul', 2.0), ('hl_sl_atr_mul', 4.0),
-        ('tr_ma_type', 'EMA'), ('tr_ma_length', 100),
-        ('exchange_decimal', 3), ('installment', 1),
-    )
-    def __init__(self):
-        self.dataclose = self.datas[0].close; self.datahigh = self.datas[0].high; self.datalow = self.datas[0].low
-        self.atr_tp = bt.indicators.ATR(self.datas[0], period=self.p.atr_length)
-        self.atr_sl = bt.indicators.ATR(self.datas[0], period=self.p.atr_length2)
-        safe_close = bt.If(self.dataclose > 0, self.dataclose, 0.000001)
-        self.ma1 = bt.indicators.SMA((self.datahigh - self.datalow) / safe_close, period=self.p.ma1_length)
-        self.ma2 = UniversalMA(self.datas[0], period=self.p.ma2_length, matype=self.p.ma2_type)
-        self.bb = BBCustom(period=self.p.bb_length, dev=self.p.bb_dev, min_width=self.p.bb_min_width, matype=self.p.bb_ma_type)
-        self.hott = HOTTIndicator(self.datas[0], period=self.p.hott_h_length, length=self.p.hott_length, percent=self.p.hott_percent, use_high=self.p.hott_use_high, matype=self.p.hott_ma_type)
-        self.tr_ma = UniversalMA(self.dataclose, period=self.p.tr_ma_length, matype=self.p.tr_ma_type)
-        self.entry_id = None; self.partial_filled = False; self.tp_order = None; self.sl_order = None
-        self.pending_orders = [] # 🚨 [V4.9] 단일 변수 대신 리스트로 다중 대기 주문 추적
-        t_size = 10.0 ** -self.p.exchange_decimal
-        self.broker.set_slippage_fixed(3.0 * t_size)
+    class TestStrategy(bt.Strategy):
+        params = (
+            ('hl_price', 'H/L OTT'), ('open_at_hl', 'limits'), ('open_at_ll', 'limits'),
+            ('exit_at_hl', 'close'), ('exit_at_ll', 'limits'),
+            ('hl_tp_price', 'both'), ('hl_sl_price', 'both'),
+            ('tr_hl', True), ('ll_volatility_filter', False),
+            ('ma1_length', 20), ('ll_mult', 1.5),
+            ('ma2_type', 'EMA'), ('ma2_length', 3),
+            ('bb_ma_type', 'EMA'), ('bb_length', 20), ('bb_dev', 2.0), ('bb_min_width', 3.0),
+            ('hott_ma_type', 'EMA'), ('hott_length', 2), ('hott_percent', 0.6), ('hott_h_length', 100), ('hott_use_high', False),
+            ('high_int', 0), ('entry_ll_per', 0.06),
+            ('tp_hl_per', 0.015), ('sl_hl_per', 0.02), ('tp_ll_per', 0.015), ('sl_ll_per', 0.015),
+            ('atr_length', 10), ('atr_length2', 10), ('hl_tp_atr_mul', 2.0), ('hl_sl_atr_mul', 4.0),
+            ('tr_ma_type', 'EMA'), ('tr_ma_length', 100),
+            ('exchange_decimal', 3), ('installment', 1),
+        )
+        def __init__(self):
+            self.dataclose = self.datas[0].close; self.datahigh = self.datas[0].high; self.datalow = self.datas[0].low
+            self.atr_tp = bt.indicators.ATR(self.datas[0], period=self.p.atr_length)
+            self.atr_sl = bt.indicators.ATR(self.datas[0], period=self.p.atr_length2)
+            safe_close = bt.If(self.dataclose > 0, self.dataclose, 0.000001)
+            self.ma1 = bt.indicators.SMA((self.datahigh - self.datalow) / safe_close, period=self.p.ma1_length)
+            self.ma2 = UniversalMA(self.datas[0], period=self.p.ma2_length, matype=self.p.ma2_type)
+            self.bb = BBCustom(period=self.p.bb_length, dev=self.p.bb_dev, min_width=self.p.bb_min_width, matype=self.p.bb_ma_type)
+            self.hott = HOTTIndicator(self.datas[0], period=self.p.hott_h_length, length=self.p.hott_length, percent=self.p.hott_percent, use_high=self.p.hott_use_high, matype=self.p.hott_ma_type)
+            self.tr_ma = UniversalMA(self.dataclose, period=self.p.tr_ma_length, matype=self.p.tr_ma_type)
+            self.entry_id = None; self.partial_filled = False; self.tp_order = None; self.sl_order = None
+            self.pending_orders = [] # 🚨 [V4.9] 단일 변수 대신 리스트로 다중 대기 주문 추적
+            t_size = 10.0 ** -self.p.exchange_decimal
+            self.broker.set_slippage_fixed(3.0 * t_size)
 
-    def get_qty(self, val): return math.floor(val * (10**self.p.exchange_decimal)) / (10.0**self.p.exchange_decimal)
+        def get_qty(self, val): return math.floor(val * (10**self.p.exchange_decimal)) / (10.0**self.p.exchange_decimal)
+    globals()['BT_CLASSES_LOADED'] = True
 
     def issue_exit_orders(self, bp, size):
         exit_mode = self.p.exit_at_hl if self.entry_id == 'HL' else self.p.exit_at_ll

@@ -3,11 +3,20 @@ import pandas as pd
 import sys
 import io
 import numpy as np
+import hashlib
+
+_bt_namespace_cache = {}
 
 def run_backtrader(code_str: str, data: pd.DataFrame, optuna_trial=None, external_params: dict = None):
-    """Backtrader를 이용한 동적 백테스트 실행 (분석기 경로 및 수치 보호 장치 강화)"""
-    exec_globals = globals().copy()
-    exec_globals.update({'optuna_trial': optuna_trial, 'data': data, 'external_params': external_params})
+    """Backtrader를 이용한 동적 백테스트 실행 (메모리 캐싱 및 수치 보호 장치 강화)"""
+    code_hash = hashlib.md5(code_str.encode('utf-8')).hexdigest()
+    if code_hash not in _bt_namespace_cache:
+        _bt_namespace_cache[code_hash] = globals().copy()
+        
+    exec_globals = _bt_namespace_cache[code_hash]
+    exec_globals['optuna_trial'] = optuna_trial
+    exec_globals['data'] = data
+    exec_globals['external_params'] = external_params
     
     try:
         exec(code_str, exec_globals)
@@ -61,11 +70,22 @@ def run_backtrader(code_str: str, data: pd.DataFrame, optuna_trial=None, externa
     except Exception as e:
         return False, f"Backtrader 에러: {str(e)}"
 
+_vbt_namespace_cache = {}
+
 def run_vectorbt(code_str: str, data: pd.DataFrame, optuna_trial=None):
-    """Vectorbt를 이용한 동적 백테스트 실행 (무결성 및 수치 보호)"""
-    exec_globals = globals().copy()
-    # [V13] 디버깅을 위해 로컬 네임스페이스 분리 및 초기 데이터 상태 기록
-    exec_globals.update({'data': data.copy(), 'optuna_trial': optuna_trial, 'np': np, 'pd': pd})
+    """Vectorbt를 이용한 동적 백테스트 실행 (무결성 및 OOM 방지 네임스페이스 캐싱)"""
+    # [메모리 누수 방지] Numba JIT 컴파일 재활용을 위한 캐싱 처리
+    code_hash = hashlib.md5(code_str.encode('utf-8')).hexdigest()
+    if code_hash not in _vbt_namespace_cache:
+        _vbt_namespace_cache[code_hash] = globals().copy()
+        
+    exec_globals = _vbt_namespace_cache[code_hash]
+    
+    # [V13] 디버깅 및 데이터 업데이트를 위해 로컬 변수 주입
+    exec_globals['data'] = data
+    exec_globals['optuna_trial'] = optuna_trial
+    exec_globals['np'] = np
+    exec_globals['pd'] = pd
     
     try:
         exec(code_str, exec_globals)
