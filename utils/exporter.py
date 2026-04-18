@@ -3,14 +3,14 @@ import io
 import optuna
 
 def create_excel_report(study, data_df):
-    """Optuna Study의 상위 50개 전략 상세 지표를 포함한 전문 엑셀 리포트 생성"""
+    """Optuna Study의 상위 100개 전략 상세 지표를 포함한 전문 엑셀 리포트 생성"""
     
     # 1. 완료된 Trial들만 추출하여 수익률(value) 기준 내림차순 정렬
     trials = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
     trials.sort(key=lambda t: t.value if t.value is not None else -9999, reverse=True)
     
-    # 상위 50개 선정
-    top_trials = trials[:50]
+    # 상위 100개 선정
+    top_trials = trials[:100]
     
     # 2. 리포트 데이터 생성
     report_rows = []
@@ -55,11 +55,11 @@ def create_excel_report(study, data_df):
     # 4. 바이트 스트림으로 저장
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        report_df.to_excel(writer, sheet_name='Top_50_Strategies', index=False)
+        report_df.to_excel(writer, sheet_name='Top_100_Strategies', index=False)
         
         # 엑셀 서식 자동 조정
         workbook  = writer.book
-        worksheet = writer.sheets['Top_50_Strategies']
+        worksheet = writer.sheets['Top_100_Strategies']
         
         # 헤더 서식
         header_format = workbook.add_format({

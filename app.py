@@ -44,7 +44,7 @@ with st.sidebar:
     eng = st.selectbox("엔진", ["Vectorbt", "Backtrader"], key="engine_sel")
     sym = st.text_input("심볼", "BTC/USDT")
     tf = st.selectbox("주기", ["15m", "30m", "1h", "2h", "4h"])
-    trials = st.number_input("탐색수", 10, 10000, 100)
+    trials = st.number_input("탐색수", 10, 100000, 100)
     workers = st.number_input("워커 수 (병렬 엔진)", 2, 8, 4)
     
     st.markdown("---")
@@ -115,9 +115,9 @@ st.text_area("Python Code", key="strategy_code", height=350)
 st.divider()
 
 # 📜 히스토리
-st.markdown("### 📜 리포트 아카이브 (최신 5개)")
+st.markdown("### 📜 리포트 아카이브 (최신 10개)")
 res_files = sorted(glob.glob("results/*.xlsx"), key=os.path.getmtime, reverse=True)
-for i, fp in enumerate(res_files[:5]):
+for i, fp in enumerate(res_files[:10]):
     fn = os.path.basename(fp)
     with st.container():
         cols = st.columns([4, 1])
@@ -240,7 +240,7 @@ if active_task:
             st.success(f"🏆 최적화 완료! 최고의 수익률: {final.get('best_value', 0.0):.2f}%")
             if final.get("excel_file") and os.path.exists(final["excel_file"]):
                 with open(final["excel_file"], "rb") as f:
-                    st.download_button("📥 상위 50개 상세 리포트 다운로드", f, os.path.basename(final["excel_file"]), type="primary")
+                    st.download_button("📥 상위 100개 상세 리포트 다운로드", f, os.path.basename(final["excel_file"]), type="primary")
             
             # 🚨 재시작을 위한 초기화 버튼
             if st.button("🧹 작업 초기화 및 다시 시작", use_container_width=True):
