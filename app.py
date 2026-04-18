@@ -232,9 +232,14 @@ if active_task:
             draw_m(p_m4, "탐색 종료", f"{len(study.get_trials())} 회", "#000000")
         except: pass
     
-    # 작업 완료 후 처리
+    # 🏁 작업 완료 후 처리
     try:
-        final = tk.get(timeout=10)
+        # 결과를 세션에 캐싱하여 중복 get() 호출 방지
+        if "final_result" not in st.session_state:
+            with st.status("📊 최종 리포트 집계 및 엑셀 생성 중...", expanded=True):
+                st.session_state["final_result"] = tk.get(timeout=60)
+        
+        final = st.session_state["final_result"]
         if final and final.get("status") == "SUCCESS":
             st.balloons()
             st.success(f"🏆 최적화 완료! 최고의 수익률: {final.get('best_value', 0.0):.2f}%")
@@ -243,8 +248,9 @@ if active_task:
                     st.download_button("📥 상위 100개 상세 리포트 다운로드", f, os.path.basename(final["excel_file"]), type="primary")
             
             # 🚨 재시작을 위한 초기화 버튼
-            if st.button("🧹 작업 초기화 및 다시 시작", use_container_width=True):
+            if st.button("Sweep & Restart (새 연구 시작)", use_container_width=True):
                 if os.path.exists(CACHE_FILE): os.remove(CACHE_FILE)
+                if "final_result" in st.session_state: del st.session_state["final_result"]
                 st.rerun()
     except Exception as e:
         status_slot.error(f"❌ 작업 결과 처리 중 오류: {str(e)}")
