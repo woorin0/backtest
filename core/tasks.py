@@ -47,11 +47,12 @@ class ProgressCallback:
         self.thresholds = [25, 50, 75]
 
     def __call__(self, study, trial):
-        # 1. 전역 완료된 시도 횟수 확인
-        completed_trials = len(study.get_trials(states=[optuna.trial.TrialState.COMPLETE]))
+        # 1. Redis에서 전역 완료 횟수 가져오기 (성능 최적화: get_trials 전수조사 제거)
+        completed_val = status_redis.get(f"progress:{self.study_name}")
+        completed_trials = int(completed_val) if completed_val else 0
         current_pct = int((completed_trials / self.total_trials) * 100)
         
-        # 2. 임계값 도달 여부 체크
+        # 2. 임계값 도달 여부 체크 (기존 로직 유지)
         for th in self.thresholds:
             if current_pct >= th:
                 # Redis를 이용해 해당 구간 알림이 이미 전송되었는지 확인 (Distributed Lock)
@@ -84,7 +85,27 @@ def run_optuna_worker(self, study_name: str, data_path: str, engine: str, code_s
                     trial.set_user_attr('MDD (%)', res.get('MDD (%)', 0.0))
                     trial.set_user_attr('Total Trades', res.get('Total Trades', 0))
                     trial.set_user_attr('Total Profit', res.get('Total Profit', 0.0))
-                    return float(res.get("Total Return (%)", 0.0))
+                    
+                    # 🚀 [V7.1] 실시간 고속 진행률 추적을 위한 Redis 카운터 증가
+                    status_redis.incr(f"progress:{study_name}")
+                    status_redis.expire(f"progress:{study_name}", 86400) # 24시간 후 자동 삭제
+                    
+                    ret_val = float(res.get("Total Return (%)", 0.0))
+                    win_rate = res.get('Win Rate (%)', 0.0)
+                    mdd = res.get('MDD (%)', 0.0)
+                    
+                    # 🚀 [V7.2] 최고 성능 지표 실시간 독립 캐싱 O(1)
+                    best_key = f"best_metrics:{study_name}"
+                    current_best = status_redis.hget(best_key, "value")
+                    if current_best is None or ret_val > float(current_best):
+                        status_redis.hset(best_key, mapping={
+                            "value": float(ret_val),
+                            "win_rate": float(win_rate),
+                            "mdd": float(mdd)
+                        })
+                        status_redis.expire(best_key, 86400)
+                    
+                    return ret_val
                 else:
                     # 🚨 -999.0 대신 Pruned 처리하여 결과 오염 방지
                     if not error_notified:

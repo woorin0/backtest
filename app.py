@@ -171,18 +171,18 @@ if active_task:
     @st.fragment(run_every=3)
     def monitor_progress():
         try:
-            study = optuna.load_study(study_name=active_task.get("study_name"), storage=storage)
-            compl = len(study.get_trials(states=[optuna.trial.TrialState.COMPLETE]))
+            # 🚀 [V7.1] 성능 최적화: get_trials() 전수조사 대신 Redis 카운터 사용
+            completed_val = status_redis.get(f"progress:{active_task.get('study_name')}")
+            compl = int(completed_val) if completed_val else 0
             
-            # 베스트 전략 상세 지표 파싱
+            # 베스트 전략 상세 지표 파싱 (🚀 [V7.2] Redis 해시 직접 접근으로 O(1) 비용 처리)
             best_val, best_win, best_mdd = 0.0, 0.0, 0.0
             if compl > 0:
-                try:
-                    best_trial = study.best_trial
-                    best_val = best_trial.value if best_trial.value is not None else 0.0
-                    best_win = best_trial.user_attrs.get('Win Rate (%)', 0.0)
-                    best_mdd = best_trial.user_attrs.get('MDD (%)', 0.0)
-                except: pass
+                best_cache = status_redis.hgetall(f"best_metrics:{active_task.get('study_name')}")
+                if best_cache:
+                    best_val = float(best_cache.get('value', 0.0))
+                    best_win = float(best_cache.get('win_rate', 0.0))
+                    best_mdd = float(best_cache.get('mdd', 0.0))
             
             p_v = min(int(compl / active_task.get("n_trials", 1) * 100), 100)
             gauge_slot.progress(p_v, text=f"🚀 실시간 최적화 분석 중... {compl} / {active_task.get('n_trials')} ({p_v}%)")
@@ -232,35 +232,37 @@ if active_task:
             draw_m(p_m4, "탐색 종료", f"{len(study.get_trials())} 회", "#000000")
         except: pass
     
-    # 🏁 작업 완료 후 처리
-    try:
-        # 결과를 세션에 캐싱하여 중복 get() 호출 방지
-        if "final_result" not in st.session_state:
-            with st.status("📊 최종 리포트 집계 및 엑셀 생성 중...", expanded=True):
-                st.session_state["final_result"] = tk.get(timeout=60)
-        
-        final = st.session_state["final_result"]
-        if final and final.get("status") == "SUCCESS":
-            st.balloons()
-            st.success(f"🏆 최적화 완료! 최고의 수익률: {final.get('best_value', 0.0):.2f}%")
-            if final.get("excel_file") and os.path.exists(final["excel_file"]):
-                with open(final["excel_file"], "rb") as f:
-                    st.download_button("📥 상위 100개 상세 리포트 다운로드", f, os.path.basename(final["excel_file"]), type="primary")
+    # 🏁 작업 완료 후 처리 (로직 교정: tk.ready()일 때만 진입하여 프리징 방지)
+    if tk.ready():
+        try:
+            # 결과를 세션에 캐싱하여 중복 get() 호출 방지
+            if "final_result" not in st.session_state:
+                with st.status("📊 최종 리포트 집계 및 엑셀 생성 중... (대량 데이터의 경우 최대 3분 소요)", expanded=True):
+                    # 🚀 [V7.1] 대량 데이터 처리 시간 고려 타임아웃 연장 (60s -> 180s)
+                    st.session_state["final_result"] = tk.get(timeout=180)
             
-            # 🚨 재시작을 위한 초기화 버튼
-            if st.button("Sweep & Restart (새 연구 시작)", use_container_width=True):
+            final = st.session_state["final_result"]
+            if final and final.get("status") == "SUCCESS":
+                st.balloons()
+                st.success(f"🏆 최적화 완료! 최고의 수익률: {final.get('best_value', 0.0):.2f}%")
+                if final.get("excel_file") and os.path.exists(final["excel_file"]):
+                    with open(final["excel_file"], "rb") as f:
+                        st.download_button("📥 상위 100개 상세 리포트 다운로드", f, os.path.basename(final["excel_file"]), type="primary")
+                
+                # 🚨 재시작을 위한 초기화 버튼
+                if st.button("Sweep & Restart (새 연구 시작)", use_container_width=True):
+                    if os.path.exists(CACHE_FILE): os.remove(CACHE_FILE)
+                    if "final_result" in st.session_state: del st.session_state["final_result"]
+                    st.rerun()
+        except Exception as e:
+            status_slot.error(f"❌ 작업 결과 처리 중 오류: {str(e)}")
+            if st.button("🚨 시스템 강제 초기화 (태스크 포함)", use_container_width=True):
+                if active_task:
+                    celery_app.control.revoke(active_task.get("task_id"), terminate=True)
+                    for wid in active_task.get("worker_ids", []):
+                        celery_app.control.revoke(wid, terminate=True)
                 if os.path.exists(CACHE_FILE): os.remove(CACHE_FILE)
-                if "final_result" in st.session_state: del st.session_state["final_result"]
                 st.rerun()
-    except Exception as e:
-        status_slot.error(f"❌ 작업 결과 처리 중 오류: {str(e)}")
-        if st.button("🚨 시스템 강제 초기화 (태스크 포함)", use_container_width=True):
-            if active_task:
-                celery_app.control.revoke(active_task.get("task_id"), terminate=True)
-                for wid in active_task.get("worker_ids", []):
-                    celery_app.control.revoke(wid, terminate=True)
-            if os.path.exists(CACHE_FILE): os.remove(CACHE_FILE)
-            st.rerun()
 else:
     draw_m(p_m1, "최고 수익률", "0.00%")
     draw_m(p_m4, "진행률", "준비 완료")
