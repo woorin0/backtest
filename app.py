@@ -166,7 +166,8 @@ if btn_start and not active_task:
 
 if active_task:
     tk = AsyncResult(active_task["task_id"], app=celery_app)
-    storage = JournalStorage(JournalRedisStorage("redis://localhost:6379/1"))
+    # 🚀 [V7.3] JournalRedisStorage를 폐기하고 무제한 용량의 SQLite 데이터베이스로 프론트엔드 연결
+    storage = "sqlite:///optuna_results.db"
     
     @st.fragment(run_every=3)
     def monitor_progress():

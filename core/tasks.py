@@ -41,8 +41,8 @@ celery_app.conf.update(
 )
 
 def get_study(study_name):
-    redis_url = "redis://localhost:6379/1"
-    storage = JournalStorage(JournalRedisStorage(redis_url))
+    # 🚀 [V7.3] JournalRedisStorage 완전 제거, 메모리 한계 없는 로컬 SQLite RDBMS 도입
+    storage = "sqlite:///optuna_results.db"
     return optuna.create_study(study_name=study_name, storage=storage, direction="maximize", load_if_exists=True)
 
 class ProgressCallback:
@@ -65,8 +65,8 @@ class ProgressCallback:
                 # Redis를 이용해 해당 구간 알림이 이미 전송되었는지 확인 (Distributed Lock)
                 lock_key = f"alert_lock:{self.study_name}:{th}"
                 if status_redis.setnx(lock_key, "sent"):
-                    # 락 획득 성공 시 알림 전송 (만료시간 1시간 설정하여 자동 청소)
-                    status_redis.expire(lock_key, 3600)
+                    # 🚀 [V7.3] 락 획득 성공 시 알림 전송 (만료시간 7일로 대폭 연장하여 중복 발송 원천 차단)
+                    status_redis.expire(lock_key, 86400 * 7)
                     best_val = study.best_value if completed_trials > 0 else 0.0
                     send_discord_progress(self.study_name, self.symbol, th, best_val)
 
@@ -127,8 +127,15 @@ def run_optuna_worker(self, study_name: str, data_path: str, engine: str, code_s
         status_redis.set(f"worker_status_{worker_id}", "완료됨", ex=300)
         return {"status": "worker_done"}
     except Exception as e:
-        status_redis.set(f"worker_status_{worker_id}", f"치명적 오류: {str(e)}", ex=3600)
-        return {"error": str(e)}
+        error_msg = str(e)
+        # 🚨 [V7.3] 타임아웃 및 OOM 워커 강제 중단 발생 시 디스코드 즉시 알람
+        try:
+            send_discord_error(f"워커 강제 종료 또는 통신 단절 에러: {error_msg}", pair=symbol, engine=engine)
+            status_redis.set(f"worker_status_{worker_id}", f"치명적 오류: {error_msg}", ex=3600)
+        except: 
+            pass # Redis마저 죽었을 경우 방어
+            
+        return {"error": error_msg}
 
 @celery_app.task(bind=True)
 def finalize_optuna_study(self, worker_results, study_name: str, data_path: str, engine: str, symbol: str):
