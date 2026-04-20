@@ -74,6 +74,11 @@ _vbt_namespace_cache = {}
 
 def run_vectorbt(code_str: str, data: pd.DataFrame, optuna_trial=None):
     """Vectorbt를 이용한 동적 백테스트 실행 (무결성 및 OOM 방지 네임스페이스 캐싱)"""
+    # [설정] VectorBT 글로벌 캐시 비활성화 (메모리 해제를 위함)
+    import vectorbt as vbt
+    if getattr(vbt.settings, 'caching', None) is not None:
+        vbt.settings.caching['enabled'] = False
+        
     # [메모리 누수 방지] Numba JIT 컴파일 재활용을 위한 캐싱 처리
     code_hash = hashlib.md5(code_str.encode('utf-8')).hexdigest()
     if code_hash not in _vbt_namespace_cache:
@@ -99,7 +104,17 @@ def run_vectorbt(code_str: str, data: pd.DataFrame, optuna_trial=None):
                 if np.isnan(v) or np.isinf(v):
                     metrics[k] = 0.0
             
-        return True, metrics
+        # [V14] 메모리 누수 방지를 위한 거대 데이터셋 강제 삭제 처리
+        ret_metrics = metrics.copy()
+        keys_to_delete = []
+        for key, val in exec_globals.items():
+            # Numpy arrays, Pandas objects, VectorBT 포트폴리오 등 메모리를 잡아먹는 객체 강제 GC 대상화
+            if isinstance(val, (pd.DataFrame, pd.Series, np.ndarray)) or str(type(val)).find('vectorbt') != -1:
+                keys_to_delete.append(key)
+        for key in keys_to_delete:
+            del exec_globals[key]
+            
+        return True, ret_metrics
         
     except Exception as e:
         # [V13] 상세 에러 리포팅: 어떤 데이터 포인트에서 NaN이 터졌는지 확인용

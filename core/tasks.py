@@ -32,6 +32,13 @@ celery_app = Celery(
     broker='redis://localhost:6379/0',
     backend='redis://localhost:6379/0'
 )
+# [V14] Celery 워커 메모리 누수 방지 (대규모 데이터프레임 처리 시 OOM 프로세스 멈춤 완벽 방어)
+celery_app.conf.update(
+    worker_max_tasks_per_child=10, 
+    worker_max_memory_per_child=400000, # 약 400MB 도달 시 워커 안전하게 재시작
+    worker_prefetch_multiplier=1,
+    task_acks_late=True
+)
 
 def get_study(study_name):
     redis_url = "redis://localhost:6379/1"
