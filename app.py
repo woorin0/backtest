@@ -149,6 +149,10 @@ if btn_start and not active_task:
     if data is not None and not data.empty:
         dp = get_cache_path("Binance", sym, tf, date_start, date_end)
         sn = f"study_{int(time.time())}"
+        
+        # 🚀 [V7.4] 다중 워커 SQLite 동시 접근에 따른 Alembic 초기화 충돌(IntegrityError) 방지를 위한 사전 생성
+        import optuna
+        optuna.create_study(study_name=sn, storage="sqlite:///optuna_results.db", direction="maximize", load_if_exists=True)
         # 워커 시그니처 및 ID 사전 생성 (상태 추적용)
         worker_sigs = []
         worker_ids = []
