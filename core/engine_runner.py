@@ -117,7 +117,7 @@ def run_vectorbt(code_str: str, data: pd.DataFrame, optuna_trial=None):
         return True, ret_metrics
         
     except Exception as e:
-        # [V13] 상세 에러 리포팅: 어떤 데이터 포인트에서 NaN이 터졌는지 확인용
+        # [V13] 상세 에러 리포팅
         err_msg = str(e)
         diag = f"Vectorbt 에러: {err_msg}"
         if "cash cannot be NaN" in err_msg:
@@ -132,6 +132,9 @@ def run_vectorbt(code_str: str, data: pd.DataFrame, optuna_trial=None):
                 if pr is not None: diag += f", PrNaN: {np.isnan(pr).sum()}"
             except: pass
         return False, diag
+    finally:
+        import gc
+        gc.collect() # 연산 종료 후 가비지 컬렉션 강제 수행
 
 def run_backtest(engine: str, code_str: str, data: pd.DataFrame, optuna_trial=None):
     if engine.lower() == 'backtrader':

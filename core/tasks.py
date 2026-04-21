@@ -3,11 +3,6 @@ import time
 import pandas as pd
 from celery import Celery
 import optuna
-from optuna.storages import JournalStorage
-try:
-    from optuna.storages import JournalRedisStorage
-except ImportError:
-    from optuna_integration.storages import JournalRedisStorage
 from core.engine_runner import run_backtest
 from core.notifier import send_discord_alert, send_discord_error, send_discord_progress
 from utils.exporter import create_excel_report
@@ -32,10 +27,10 @@ celery_app = Celery(
     broker='redis://localhost:6379/0',
     backend='redis://localhost:6379/0'
 )
-# [V14] Celery 워커 메모리 누수 방지 (대규모 데이터프레임 처리 시 OOM 프로세스 멈춤 완벽 방어)
+# [V14.1] Celery 워커 메모리 누수 방지 (8GB RAM 최적화: 1.5GB 제한 및 낮은 태스크 수 설정)
 celery_app.conf.update(
-    worker_max_tasks_per_child=10, 
-    worker_max_memory_per_child=400000, # 약 400MB 도달 시 워커 안전하게 재시작
+    worker_max_tasks_per_child=5, 
+    worker_max_memory_per_child=1500000, # 약 1.5GB 도달 시 워커 안전하게 재시작
     worker_prefetch_multiplier=1,
     task_acks_late=True
 )
@@ -87,11 +82,18 @@ def run_optuna_worker(self, study_name: str, data_path: str, engine: str, code_s
                 success, res = run_backtest(engine, code_str, data, optuna_trial=trial)
                 
                 if success and isinstance(res, dict):
-                    # 성공 시 지표 저장
-                    trial.set_user_attr('Win Rate (%)', res.get('Win Rate (%)', 0.0))
-                    trial.set_user_attr('MDD (%)', res.get('MDD (%)', 0.0))
-                    trial.set_user_attr('Total Trades', res.get('Total Trades', 0))
-                    trial.set_user_attr('Total Profit', res.get('Total Profit', 0.0))
+                    # 성공 시 지표 저장 (🚀 [방어] 거대 객체 직렬화로 인한 커밋 에러 원천 차단)
+                    def safe_set(key, val):
+                        if isinstance(val, (int, float, str, bool)):
+                            trial.set_user_attr(key, val)
+                        else:
+                            # 객체가 너무 클 경우 문자열로 요약만 저장
+                            trial.set_user_attr(key, str(val)[:100])
+
+                    safe_set('Win Rate (%)', res.get('Win Rate (%)', 0.0))
+                    safe_set('MDD (%)', res.get('MDD (%)', 0.0))
+                    safe_set('Total Trades', res.get('Total Trades', 0))
+                    safe_set('Total Profit', res.get('Total Profit', 0.0))
                     
                     # 🚀 [V7.1] 실시간 고속 진행률 추적을 위한 Redis 카운터 증가
                     status_redis.incr(f"progress:{study_name}")

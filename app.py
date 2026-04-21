@@ -8,11 +8,6 @@ import glob
 import redis
 from dotenv import load_dotenv
 import optuna
-from optuna.storages import JournalStorage
-try:
-    from optuna.storages import JournalRedisStorage
-except ImportError:
-    from optuna_integration.storages import JournalRedisStorage
 from celery.result import AsyncResult
 from celery import chord
 from core.tasks import run_optuna_worker, finalize_optuna_study, celery_app
