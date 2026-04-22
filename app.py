@@ -41,6 +41,7 @@ with st.sidebar:
     tf = st.selectbox("주기", ["15m", "30m", "1h", "2h", "4h"])
     trials = st.number_input("탐색수", 10, 100000, 100)
     workers = st.number_input("워커 수 (병렬 엔진)", 2, 8, 4)
+    repeat_count = st.number_input("반복수 (자동 연속 실행)", 1, 10, 1)
     
     st.markdown("---")
     st.markdown("📅 **백테스트 기간 설정**")
@@ -159,7 +160,11 @@ if btn_start and not active_task:
             worker_ids.append(w_id)
             
         res = chord(worker_sigs)(finalize_optuna_study.s(sn, dp, eng, sym))
-        active_task = {"task_id": res.id, "worker_ids": worker_ids, "study_name": sn, "n_trials": trials}
+        active_task = {
+            "task_id": res.id, "worker_ids": worker_ids, "study_name": sn, "n_trials": trials,
+            "current_iter": 1, "total_iters": repeat_count,
+            "params": {"dp": dp, "eng": eng, "code": st.session_state["strategy_code"], "trials": trials, "workers": workers, "sym": sym}
+        }
         with open(CACHE_FILE, "w") as f: json.dump(active_task, f)
         st.rerun()
 
@@ -185,7 +190,10 @@ if active_task:
                     best_mdd = float(best_cache.get('mdd', 0.0))
             
             p_v = min(int(compl / active_task.get("n_trials", 1) * 100), 100)
-            gauge_slot.progress(p_v, text=f"🚀 실시간 최적화 분석 중... {compl} / {active_task.get('n_trials')} ({p_v}%)")
+            cur_i = active_task.get("current_iter", 1)
+            tot_i = active_task.get("total_iters", 1)
+            iter_text = f"[{cur_i}/{tot_i}회차] " if tot_i > 1 else ""
+            gauge_slot.progress(p_v, text=f"🚀 {iter_text}실시간 최적화 분석 중... {compl} / {active_task.get('n_trials')} ({p_v}%)")
             
             # 상단 4개 지표 카드 실시간 갱신
             draw_m(p_m1, "최고 수익률", f"{best_val:.2f}%", "#34C759")
@@ -242,18 +250,54 @@ if active_task:
                     st.session_state["final_result"] = tk.get(timeout=180)
             
             final = st.session_state["final_result"]
+            cur_i = active_task.get("current_iter", 1)
+            tot_i = active_task.get("total_iters", 1)
+            
             if final and final.get("status") == "SUCCESS":
                 st.balloons()
-                st.success(f"🏆 최적화 완료! 최고의 수익률: {final.get('best_value', 0.0):.2f}%")
+                st.success(f"🏆 {cur_i}/{tot_i}회차 최적화 완료! 최고의 수익률: {final.get('best_value', 0.0):.2f}%")
                 if final.get("excel_file") and os.path.exists(final["excel_file"]):
                     with open(final["excel_file"], "rb") as f:
-                        st.download_button("📥 상위 100개 상세 리포트 다운로드", f, os.path.basename(final["excel_file"]), type="primary")
+                        st.download_button(f"📥 {cur_i}회차 상세 리포트 다운로드", f, os.path.basename(final["excel_file"]), type="primary")
                 
-                # 🚨 재시작을 위한 초기화 버튼
-                if st.button("Sweep & Restart (새 연구 시작)", use_container_width=True):
-                    if os.path.exists(CACHE_FILE): os.remove(CACHE_FILE)
+                # 🚨 연속 실행 루프 로직
+                if cur_i < tot_i:
+                    st.info(f"🔄 다음 반복({cur_i + 1}/{tot_i})을 위해 5초 후 자동 시작합니다...")
+                    time.sleep(5)
+                    
                     if "final_result" in st.session_state: del st.session_state["final_result"]
+                    params = active_task.get("params", {})
+                    next_sn = f"study_{int(time.time())}"
+                    
+                    import optuna
+                    optuna.create_study(study_name=next_sn, storage="sqlite:///optuna_results.db", direction="maximize", load_if_exists=True)
+                    
+                    worker_sigs = []
+                    worker_ids = []
+                    w_cnt = params.get("workers", 4)
+                    for _ in range(w_cnt):
+                        w_id = uuid()
+                        sig = run_optuna_worker.s(next_sn, params["dp"], params["eng"], params["code"], params["trials"]//w_cnt, params["sym"], params["trials"])
+                        sig.set(task_id=w_id)
+                        worker_sigs.append(sig)
+                        worker_ids.append(w_id)
+                        
+                    res = chord(worker_sigs)(finalize_optuna_study.s(next_sn, params["dp"], params["eng"], params["sym"]))
+                    
+                    active_task["task_id"] = res.id
+                    active_task["worker_ids"] = worker_ids
+                    active_task["study_name"] = next_sn
+                    active_task["current_iter"] = cur_i + 1
+                    
+                    with open(CACHE_FILE, "w") as f: json.dump(active_task, f)
                     st.rerun()
+                else:
+                    if tot_i > 1: st.success("✅ 지정된 모든 회차의 연속 실행이 완료되었습니다. 화면 좌측 하단 [리포트 아카이브]를 확인하세요.")
+                    # 🚨 재시작을 위한 초기화 버튼
+                    if st.button("Sweep & Restart (새 연구 시작)", use_container_width=True):
+                        if os.path.exists(CACHE_FILE): os.remove(CACHE_FILE)
+                        if "final_result" in st.session_state: del st.session_state["final_result"]
+                        st.rerun()
         except Exception as e:
             status_slot.error(f"❌ 작업 결과 처리 중 오류: {str(e)}")
             if st.button("🚨 시스템 강제 초기화 (태스크 포함)", use_container_width=True):
