@@ -32,7 +32,7 @@ celery_app.conf.update(
     worker_max_tasks_per_child=5, 
     worker_max_memory_per_child=1500000, # 약 1.5GB 도달 시 워커 안전하게 재시작
     worker_prefetch_multiplier=1,
-    task_acks_late=True
+    task_acks_late=False # [V7.5] 메모리 부족 재시작 시 동일 작업 중복 실행(탐색수 오버) 방지
 )
 
 def get_study(study_name):
@@ -77,6 +77,12 @@ def run_optuna_worker(self, study_name: str, data_path: str, engine: str, code_s
         def objective(trial):
             nonlocal error_notified
             status_redis.set(f"worker_status_{worker_id}", f"최적화 중 ({trial.number}/{n_trials})", ex=600)
+            
+            # 🚀 [V7.5] 모든 워커가 합산 목표치(total_trials)를 초과하지 않도록 실시간 글로벌 체크
+            current_progress = status_redis.get(f"progress:{study_name}")
+            if current_progress and int(current_progress) >= total_trials:
+                study.stop() # 현재 워커의 최적화 루프 중단
+                return 0.0
             
             try:
                 success, res = run_backtest(engine, code_str, data, optuna_trial=trial)
