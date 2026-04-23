@@ -27,10 +27,9 @@ celery_app = Celery(
     broker='redis://localhost:6379/0',
     backend='redis://localhost:6379/0'
 )
-# [V14.1] Celery 워커 메모리 누수 방지 (8GB RAM 최적화: 1.5GB 제한 및 낮은 태스크 수 설정)
+# [V14.1] Celery 워커 메모리 누수 방지
 celery_app.conf.update(
     worker_max_tasks_per_child=5, 
-    worker_max_memory_per_child=1500000, # 약 1.5GB 도달 시 워커 안전하게 재시작
     worker_prefetch_multiplier=1,
     task_acks_late=False # [V7.5] 메모리 부족 재시작 시 동일 작업 중복 실행(탐색수 오버) 방지
 )

@@ -104,16 +104,15 @@ def run_vectorbt(code_str: str, data: pd.DataFrame, optuna_trial=None):
                 if np.isnan(v) or np.isinf(v):
                     metrics[k] = 0.0
             
-        # [V14] 메모리 누수 방지를 위한 거대 데이터셋 강제 삭제 처리
+        # [V15] 메모리 누수 방지를 위한 안전한 참조 해제 (Numba 환경 파괴 방지)
         ret_metrics = metrics.copy()
-        keys_to_delete = []
-        for key, val in exec_globals.items():
-            # Numpy arrays, Pandas objects, VectorBT 포트폴리오 등 메모리를 잡아먹는 객체 강제 GC 대상화
-            if isinstance(val, (pd.DataFrame, pd.Series, np.ndarray)) or str(type(val)).find('vectorbt') != -1:
-                keys_to_delete.append(key)
-        for key in keys_to_delete:
-            del exec_globals[key]
-            
+        
+        # 거대 참조 객체들만 명시적으로 None 처리하여 GC가 회수하게 함.
+        # 루프 방식은 vectorbt 내부 context 객체 등 꼭 필요한 글로벌 변수까지 지워버려 에러를 유발할 수 있음.
+        for safe_key in ['portfolio', 'data', 'stats']:
+            if safe_key in exec_globals:
+                exec_globals[safe_key] = None
+                
         return True, ret_metrics
         
     except Exception as e:
