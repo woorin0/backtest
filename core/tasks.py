@@ -121,12 +121,17 @@ def run_optuna_worker(self, study_name: str, data_path: str, engine: str, code_s
                     
                     return ret_val
                 else:
-                    # 🚨 -999.0 대신 Pruned 처리하여 결과 오염 방지
+                    # 🚨 에러 디버깅을 위해 로컬 파일에 로그 기록
+                    with open("debug_error.log", "a", encoding="utf-8") as f:
+                        f.write(f"TRIAL {trial.number} FAILED - RES: {str(res)}\n")
+                        
                     if not error_notified:
                         send_discord_error(f"전략 에러 발생: {str(res)}", pair=symbol, engine=engine)
                         error_notified = True
                     raise optuna.TrialPruned()
             except Exception as e:
+                with open("debug_error.log", "a", encoding="utf-8") as f:
+                    f.write(f"TRIAL {trial.number} EXCEPTION - {str(e)}\n{traceback.format_exc()}\n")
                 traceback.print_exc()
                 raise optuna.TrialPruned()
 
