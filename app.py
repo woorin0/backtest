@@ -130,12 +130,8 @@ if os.path.exists(CACHE_FILE):
             meta = json.load(f)
         if meta and isinstance(meta, dict) and "task_id" in meta:
             task_check = AsyncResult(meta["task_id"], app=celery_app)
-            if not task_check.ready(): 
-                active_task = meta
-            else: 
-                os.remove(CACHE_FILE)
-        else:
-            os.remove(CACHE_FILE)
+            # [V17] 작업이 완료되어도 연속 루프 로직 및 결과 화면을 띄워주기 위해 active_task 할당
+            active_task = meta
     except Exception:
         if os.path.exists(CACHE_FILE): os.remove(CACHE_FILE)
 
