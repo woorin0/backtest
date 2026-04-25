@@ -150,7 +150,7 @@ def run_optuna_worker(self, study_name: str, data_path: str, engine: str, code_s
         return {"error": error_msg}
 
 @celery_app.task(bind=True)
-def finalize_optuna_study(self, worker_results, study_name: str, data_path: str, engine: str, symbol: str):
+def finalize_optuna_study(self, worker_results, study_name: str, data_path: str, engine: str, symbol: str, active_task_dict: dict = None):
     # [방어 로직] 실행 시점에 한 번 더 체크
     try: import xlsxwriter
     except ImportError: subprocess.check_call([sys.executable, "-m", "pip", "install", "xlsxwriter"])
@@ -176,6 +176,43 @@ def finalize_optuna_study(self, worker_results, study_name: str, data_path: str,
             
         send_discord_alert(study_name, best_value, engine, symbol)
             
+        # 🚨 [새로운 백엔드 자율 연속 실행 루프]
+        # 브라우저 절전 모드로 인한 지연을 차단하기 위해, Celery 백엔드가 스스로 다음 회차를 발사합니다.
+        if active_task_dict:
+            cur_i = active_task_dict.get("current_iter", 1)
+            tot_i = active_task_dict.get("total_iters", 1)
+            if cur_i < tot_i:
+                params = active_task_dict.get("params", {})
+                from celery import uuid, chord
+                import optuna
+                
+                next_sn = f"study_{int(time.time())}"
+                optuna.create_study(study_name=next_sn, storage="sqlite:///optuna_results.db", direction="maximize", load_if_exists=True)
+                
+                worker_sigs = []
+                worker_ids = []
+                w_cnt = params.get("workers", 4)
+                for _ in range(w_cnt):
+                    w_id = uuid()
+                    sig = run_optuna_worker.s(next_sn, params["dp"], params["eng"], params["code"], params["trials"]//w_cnt, params["sym"], params["trials"])
+                    sig.set(task_id=w_id)
+                    worker_sigs.append(sig)
+                    worker_ids.append(w_id)
+                
+                next_active_task = active_task_dict.copy()
+                next_active_task["current_iter"] = cur_i + 1
+                next_active_task["study_name"] = next_sn
+                next_active_task["worker_ids"] = worker_ids
+                
+                res = chord(worker_sigs)(finalize_optuna_study.s(next_sn, params["dp"], params["eng"], params["sym"], next_active_task))
+                next_active_task["task_id"] = res.id
+                
+                # 디스크 파일 덮어쓰기 (프론트엔드가 깨어나면 이 파일을 읽고 최신 상태 인지)
+                cache_file = os.path.join(os.getcwd(), ".active_task.json")
+                with open(cache_file, "w") as f:
+                    import json
+                    json.dump(next_active_task, f)
+
         return {"status": "SUCCESS", "best_value": best_value, "excel_file": file_path}
     except Exception as e:
         send_discord_error(f"최종 집계 에러: {str(e)}", pair=symbol, engine=engine)
