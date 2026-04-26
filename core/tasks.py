@@ -185,6 +185,15 @@ def finalize_optuna_study(self, worker_results, study_name: str, data_path: str,
         except ValueError:
             # 시도가 하나도 없거나 모두 실패한 경우
             best_value = 0.0
+        
+        # 🚀 [V8.0] 구글 시트 자동 전송 (실패해도 엑셀 결과에 영향 없음)
+        try:
+            from utils.sheets import push_to_google_sheets
+            from utils.exporter import create_report_dataframe
+            report_df = create_report_dataframe(study)
+            push_to_google_sheets(report_df, engine, symbol, tf_str)
+        except Exception as gs_err:
+            print(f"[Google Sheets] 전송 스킵: {str(gs_err)}")
             
         send_discord_alert(study_name, best_value, engine, symbol)
             
