@@ -112,7 +112,14 @@ else:
 
 # 🚀 [V9.0] MTF 리샘플링 파이프라인 (Bar Magnifier Parity)
 # 1분봉 데이터를 전략 주기(target_tf)로 리샘플링하여 지표를 계산합니다.
-data_htf = data.vbt.resample(target_tf).ohlcv()
+_tf_upper = target_tf.upper()
+data_htf = data.resample(_tf_upper).agg({
+    'Open': 'first', 
+    'High': 'max', 
+    'Low': 'min', 
+    'Close': 'last', 
+    'Volume': 'sum'
+}).dropna()
 
 bb_mid_htf = calc_ma_vbt(data_htf['Close'], data_htf['Volume'], bb_len, bb_ma_type)
 bb_std_htf = data_htf['Close'].rolling(bb_len).std(ddof=1).values # ddof=1 (Pine Script Parity)
