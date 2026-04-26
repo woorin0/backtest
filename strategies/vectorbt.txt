@@ -160,10 +160,13 @@ ma1_htf = ((data_htf['High'] - data_htf['Low']) / data_htf['Close'].replace(0, 0
 ma2_htf = calc_ma_vbt(data_htf['Close'], data_htf['Volume'], ma2_len, ma2_type)
 tr_ma_htf = calc_ma_vbt(data_htf['Close'], data_htf['Volume'], tr_ma_len, tr_ma_type)
 
-# 🚀 [V9.0] Alignment: 상위 타임프레임 지표를 1분봉 인덱스로 확장하고 1봉 Shift (미래 참조 방지)
+# 🚀 [V9.1] Alignment: 상위 타임프레임 지표를 1분봉 인덱스로 확장 (미래 참조 완벽 차단)
 def align_to_1m(htf_arr, source_idx, target_idx):
     s = pd.Series(htf_arr, index=source_idx)
-    return s.reindex(target_idx, method='ffill').shift(1).values
+    # 1. 2시간봉 데이터를 1칸(2시간) 뒤로 밀어서, 캔들이 완성된 이후에만 참조되게 함
+    s_shifted = s.shift(1) 
+    # 2. 밀어낸 과거 데이터를 1분봉 인덱스에 맞춰 빈칸 채우기 (ffill)
+    return s_shifted.reindex(target_idx, method='ffill').values
 
 bb_u = align_to_1m(bb_u_htf, data_htf.index, data.index)
 hott_s = align_to_1m(hott_s_htf, data_htf.index, data.index)
