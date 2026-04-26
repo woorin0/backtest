@@ -65,7 +65,7 @@ class ProgressCallback:
                     send_discord_progress(self.study_name, self.symbol, th, best_val)
 
 @celery_app.task(bind=True)
-def run_optuna_worker(self, study_name: str, data_path: str, engine: str, code_str: str, n_trials: int, symbol: str, total_trials: int):
+def run_optuna_worker(self, study_name: str, data_path: str, engine: str, code_str: str, n_trials: int, symbol: str, total_trials: int, target_tf: str = "2h"):
     worker_id = self.request.id
     error_notified = False
     
@@ -84,7 +84,7 @@ def run_optuna_worker(self, study_name: str, data_path: str, engine: str, code_s
                 return 0.0
             
             try:
-                success, res = run_backtest(engine, code_str, data, optuna_trial=trial)
+                success, res = run_backtest(engine, code_str, data, optuna_trial=trial, target_tf=target_tf)
                 
                 if success and isinstance(res, dict):
                     # 성공 시 지표 저장 (🚀 [방어] 거대 객체 직렬화로 인한 커밋 에러 원천 차단)
@@ -215,7 +215,7 @@ def finalize_optuna_study(self, worker_results, study_name: str, data_path: str,
                 w_cnt = params.get("workers", 4)
                 for _ in range(w_cnt):
                     w_id = uuid()
-                    sig = run_optuna_worker.s(next_sn, params["dp"], params["eng"], params["code"], params["trials"]//w_cnt, params["sym"], params["trials"])
+                    sig = run_optuna_worker.s(next_sn, params["dp"], params["eng"], params["code"], params["trials"]//w_cnt, params["sym"], params["trials"], params["tf"])
                     sig.set(task_id=w_id)
                     worker_sigs.append(sig)
                     worker_ids.append(w_id)

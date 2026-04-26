@@ -149,9 +149,10 @@ if os.path.exists(CACHE_FILE):
 
 if btn_start and not active_task:
     from core.data_fetcher import fetch_candles, get_cache_path
-    data = fetch_candles("Binance", sym, tf, date_start, date_end, 1000)
+    target_tf = tf # 🚀 [V9.0] 지표 계산용 원래 주기 보관
+    data = fetch_candles("Binance", sym, "1m", date_start, date_end, 1000)
     if data is not None and not data.empty:
-        dp = get_cache_path("Binance", sym, tf, date_start, date_end)
+        dp = get_cache_path("Binance", sym, "1m", date_start, date_end)
         sn = f"study_{int(time.time())}"
         
         # 🚀 [V7.4] 다중 워커 SQLite 동시 접근에 따른 Alembic 초기화 충돌(IntegrityError) 방지를 위한 사전 생성
@@ -162,7 +163,8 @@ if btn_start and not active_task:
         worker_ids = []
         for _ in range(workers):
             w_id = uuid()
-            sig = run_optuna_worker.s(sn, dp, eng, st.session_state["strategy_code"], trials//workers, sym, trials)
+            # 🚀 [V9.0] target_tf(원본 주기) 추가 전달
+            sig = run_optuna_worker.s(sn, dp, eng, st.session_state["strategy_code"], trials//workers, sym, trials, target_tf)
             sig.set(task_id=w_id)
             worker_sigs.append(sig)
             worker_ids.append(w_id)
@@ -170,7 +172,7 @@ if btn_start and not active_task:
         active_task_dict = {
             "task_id": "", "worker_ids": worker_ids, "study_name": sn, "n_trials": trials,
             "current_iter": 1, "total_iters": repeat_count,
-            "params": {"dp": dp, "eng": eng, "code": st.session_state["strategy_code"], "trials": trials, "workers": workers, "sym": sym, "tf": tf}
+            "params": {"dp": dp, "eng": eng, "code": st.session_state["strategy_state" if "strategy_state" in st.session_state else "strategy_code"], "trials": trials, "workers": workers, "sym": sym, "tf": target_tf}
         }
         res = chord(worker_sigs)(finalize_optuna_study.s(sn, dp, eng, sym, active_task_dict))
         active_task_dict["task_id"] = res.id

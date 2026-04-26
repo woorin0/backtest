@@ -111,46 +111,43 @@ else:
     tp_hl_per, sl_hl_per, tp_ll_per, sl_ll_per = 0.015, 0.02, 0.015, 0.015
     ex_dec, inst, tr_hl, slip_pct = 3, 1, True, 0.0005
 
-bb_mid = calc_ma_vbt(data['Close'], data['Volume'] if 'Volume' in data.columns else None, bb_len, bb_ma_type)
-bb_std = data['Close'].rolling(bb_len).std(ddof=0).values
-bb_dev = np.maximum(bb_std * bb_dev_in, bb_mid * bb_min_w / 100.0)
-bb_u = bb_mid + bb_dev
-h_src = data['High'] if hott_h_src == 'High' else data['Close']
-mavg_h_pre = h_src.rolling(hott_h_len).max()
-mavg_h_np = calc_ma_vbt(mavg_h_pre, data['Volume'] if 'Volume' in data.columns else None, hott_len, hott_ma_type)
+# 🚀 [V9.0] MTF 리샘플링 파이프라인 (Bar Magnifier Parity)
+# 1분봉 데이터를 전략 주기(target_tf)로 리샘플링하여 지표를 계산합니다.
+_tf = globals().get('target_tf', '2h') # 기본값 설정
+data_htf = data.vbt.resample(_tf).ohlcv()
 
-if 'JIT_COMPILED_HOTT' not in globals():
-    @njit
-    def calc_hott_nb(mavg_np, percent):
-        n = len(mavg_np); hott = np.full(n, np.nan); lsp, ssp, dv = np.nan, np.nan, 1
-        for i in range(n):
-            ma = mavg_np[i]
-            if np.isnan(ma): continue
-            fk = ma * percent * 0.01; ls, ss = ma - fk, ma + fk
-            if np.isnan(lsp): lsp, ssp = ls, ss; continue
-            if ma > lsp: lsp = max(ls, lsp)
-            if ma < ssp: ssp = min(ss, ssp)
-            if dv == -1 and ma > ssp: dv = 1
-            elif dv == 1 and ma < lsp: dv = -1
-            mt = lsp if dv == 1 else ssp
-            hott[i] = mt * (200 + percent) / 200 if ma > mt else mt * (200 - percent) / 200
-        return hott
-    globals()['JIT_COMPILED_HOTT'] = True
+bb_mid_htf = calc_ma_vbt(data_htf['Close'], data_htf['Volume'], bb_len, bb_ma_type)
+bb_std_htf = data_htf['Close'].rolling(bb_len).std(ddof=1).values # ddof=1 (Pine Script Parity)
+bb_dev_htf = np.maximum(bb_std_htf * bb_dev_in, bb_mid_htf * bb_min_w / 100.0)
+bb_u_htf = bb_mid_htf + bb_dev_htf
 
-hott_v = calc_hott_nb(mavg_h_np, hott_per)
+h_src_htf = data_htf['High'] if hott_h_src == 'High' else data_htf['Close']
+mavg_h_pre_htf = h_src_htf.rolling(hott_h_len).max()
+mavg_h_np_htf = calc_ma_vbt(mavg_h_pre_htf, data_htf['Volume'], hott_len, hott_ma_type)
+hott_v_htf = calc_hott_nb(mavg_h_np_htf, hott_per)
 
-# 🚀 [V6.0] hott_s 선언 위치 교정: calc_hott_nb 직후에 배치
-hott_s = np.full_like(hott_v, np.nan)
-if h_int > 0:
-    hott_s[h_int:] = hott_v[:-h_int]
-else:
-    hott_s = hott_v.copy()
+hott_s_htf = np.full_like(hott_v_htf, np.nan)
+if h_int > 0: hott_s_htf[h_int:] = hott_v_htf[:-h_int]
+else: hott_s_htf = hott_v_htf.copy()
 
-atr_tp = vbt.ATR.run(data['High'], data['Low'], data['Close'], window=atr_len).atr.values
-atr_sl = vbt.ATR.run(data['High'], data['Low'], data['Close'], window=atr_len2).atr.values
-ma1 = ((data['High'] - data['Low']) / data['Close'].replace(0, 0.0001)).rolling(ma1_len).mean().values
-ma2 = calc_ma_vbt(data['Close'], data['Volume'] if 'Volume' in data.columns else None, ma2_len, ma2_type)
-tr_ma = calc_ma_vbt(data['Close'], data['Volume'] if 'Volume' in data.columns else None, tr_ma_len, tr_ma_type)
+atr_tp_htf = vbt.ATR.run(data_htf['High'], data_htf['Low'], data_htf['Close'], window=atr_len).atr.values
+atr_sl_htf = vbt.ATR.run(data_htf['High'], data_htf['Low'], data_htf['Close'], window=atr_len2).atr.values
+ma1_htf = ((data_htf['High'] - data_htf['Low']) / data_htf['Close'].replace(0, 0.0001)).rolling(ma1_len).mean().values
+ma2_htf = calc_ma_vbt(data_htf['Close'], data_htf['Volume'], ma2_len, ma2_type)
+tr_ma_htf = calc_ma_vbt(data_htf['Close'], data_htf['Volume'], tr_ma_len, tr_ma_type)
+
+# 🚀 [V9.0] Alignment: 상위 타임프레임 지표를 1분봉 인덱스로 확장하고 1봉 Shift (미래 참조 방지)
+def align_to_1m(htf_arr, source_idx, target_idx):
+    s = pd.Series(htf_arr, index=source_idx)
+    return s.reindex(target_idx, method='ffill').shift(1).values
+
+bb_u = align_to_1m(bb_u_htf, data_htf.index, data.index)
+hott_s = align_to_1m(hott_s_htf, data_htf.index, data.index)
+atr_tp = align_to_1m(atr_tp_htf, data_htf.index, data.index)
+atr_sl = align_to_1m(atr_sl_htf, data_htf.index, data.index)
+ma1 = align_to_1m(ma1_htf, data_htf.index, data.index)
+ma2 = align_to_1m(ma2_htf, data_htf.index, data.index)
+tr_ma = align_to_1m(tr_ma_htf, data_htf.index, data.index)
 
 hl_p_triggers = (hott_s if hl_price_type == 'H/L OTT' else (bb_u if hl_price_type == 'BB' else np.maximum(hott_s, bb_u)))
 ll_p_triggers = (ma2 * (1 - ma1 * ll_mult - en_ll_per) if ll_vol_filter else ma2 * (1 - en_ll_per))

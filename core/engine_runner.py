@@ -72,7 +72,7 @@ def run_backtrader(code_str: str, data: pd.DataFrame, optuna_trial=None, externa
 
 _vbt_namespace_cache = {}
 
-def run_vectorbt(code_str: str, data: pd.DataFrame, optuna_trial=None):
+def run_vectorbt(code_str: str, data: pd.DataFrame, optuna_trial=None, target_tf: str = "2h"):
     """Vectorbt를 이용한 동적 백테스트 실행 (무결성 및 OOM 방지 네임스페이스 캐싱)"""
     # [설정] VectorBT 글로벌 캐시 비활성화 (메모리 해제를 위함)
     import vectorbt as vbt
@@ -86,9 +86,10 @@ def run_vectorbt(code_str: str, data: pd.DataFrame, optuna_trial=None):
         
     exec_globals = _vbt_namespace_cache[code_hash]
     
-    # [V13] 디버깅 및 데이터 업데이트를 위해 로컬 변수 주입
+    # [V9.0] 디버깅 및 데이터 업데이트를 위해 로컬 변수 주입 (target_tf 추가)
     exec_globals['data'] = data
     exec_globals['optuna_trial'] = optuna_trial
+    exec_globals['target_tf'] = target_tf
     exec_globals['np'] = np
     exec_globals['pd'] = pd
     
@@ -108,13 +109,10 @@ def run_vectorbt(code_str: str, data: pd.DataFrame, optuna_trial=None):
         ret_metrics = metrics.copy()
         
         # 거대 참조 객체들만 명시적으로 None 처리하여 GC가 회수하게 함.
-        # 루프 방식은 vectorbt 내부 context 객체 등 꼭 필요한 글로벌 변수까지 지워버려 에러를 유발할 수 있음.
         for safe_key in ['portfolio', 'data', 'stats', 'atr_tp', 'atr_sl']:
             if safe_key in exec_globals:
                 exec_globals[safe_key] = None
         
-        # [V16] VectorBT Portfolio 객체는 내부적으로 순환 참조(Cyclic References)를 사용하므로
-        # 명시적인 가비지 컬렉션을 하지 않으면 OOM Killer에 의해 프로세스가 죽어버립니다.
         import gc
         gc.collect()
                 
@@ -124,26 +122,15 @@ def run_vectorbt(code_str: str, data: pd.DataFrame, optuna_trial=None):
         # [V13] 상세 에러 리포팅
         err_msg = str(e)
         diag = f"Vectorbt 에러: {err_msg}"
-        if "cash cannot be NaN" in err_msg:
-            try:
-                # 템플릿 내부 변수들에 접근 시도
-                d_len = len(data)
-                en = exec_globals.get('en')
-                ex = exec_globals.get('ex')
-                pr = exec_globals.get('pr')
-                diag += f" | DataLen: {d_len}"
-                if en is not None: diag += f", EnLen: {len(en)}"
-                if pr is not None: diag += f", PrNaN: {np.isnan(pr).sum()}"
-            except: pass
         return False, diag
     finally:
         import gc
-        gc.collect() # 연산 종료 후 가비지 컬렉션 강제 수행
+        gc.collect()
 
-def run_backtest(engine: str, code_str: str, data: pd.DataFrame, optuna_trial=None):
+def run_backtest(engine: str, code_str: str, data: pd.DataFrame, optuna_trial=None, target_tf: str = "2h"):
     if engine.lower() == 'backtrader':
-        return run_backtrader(code_str, data, optuna_trial)
+        return run_backtrader(code_str, data, optuna_trial) # Backtrader는 MTF 미지원 시 기존대로
     elif engine.lower() == 'vectorbt':
-        return run_vectorbt(code_str, data, optuna_trial)
+        return run_vectorbt(code_str, data, optuna_trial, target_tf)
     else:
         return False, "미지원 엔진"
