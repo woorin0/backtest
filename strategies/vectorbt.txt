@@ -217,9 +217,8 @@ if 'JIT_COMPILED_ORDER' not in globals():
                 if exit_mode == 0:
                     # 🚀 [V7.0] 충돌 해결: 동일 봉 내 TP/SL 동시 도달 시 시가(Open)에서 더 가까운 쪽 우선 체결
                     if h[i] >= tpp and l[i] <= slp:
-                        dist_tp = abs(o[i] - tpp)
-                        dist_sl = abs(o[i] - slp)
-                        is_tp = (dist_tp < dist_sl) # TP가 더 가까우면 승리
+                        # 🚀 [V8.1] bar_magnifier 보수적 특성 반영: 동일 봉 TP/SL 충돌 시 항상 SL 우선
+                        is_tp = False
                     else:
                         is_tp = (h[i] >= tpp)
                     
@@ -256,7 +255,7 @@ portfolio = vbt.Portfolio.from_order_func(
     inst, tr_hl, o_h_m, o_l_m, e_h_m, e_l_m, tp_h_t, sl_h_t,
     tp_hl_per, sl_hl_per, tp_ll_per, sl_ll_per, hl_tp_atr_mul, hl_sl_atr_mul, slippage_ticks, ex_dec,
     id_arr, price_arr, size_arr,
-    flexible=False, init_cash=1000000, cash_sharing=False
+    flexible=False, init_cash=500000, cash_sharing=False
 )
 
 stats = portfolio.stats()
