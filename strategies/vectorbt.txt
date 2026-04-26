@@ -99,7 +99,7 @@ if 'optuna_trial' in globals() and optuna_trial:
     en_ll_per = optuna_trial.suggest_float('entry_ll_per', 0.02, 0.15, step=0.001)
     tp_hl_per, sl_hl_per = optuna_trial.suggest_float('tp_hl_per', 0.005, 0.05, step=0.001), optuna_trial.suggest_float('sl_hl_per', 0.01, 0.07, step=0.001)
     tp_ll_per, sl_ll_per = optuna_trial.suggest_float('tp_ll_per', 0.005, 0.05, step=0.001), optuna_trial.suggest_float('sl_ll_per', 0.01, 0.07, step=0.001)
-    ex_dec, inst, tr_hl, slippage_ticks = optuna_trial.suggest_int('exchange_decimal', 1, 8), optuna_trial.suggest_categorical('installment', [1, 2]), optuna_trial.suggest_categorical('tr_hl', [True, False]), 3
+    ex_dec, inst, tr_hl, slip_pct = optuna_trial.suggest_int('exchange_decimal', 1, 8), optuna_trial.suggest_categorical('installment', [1, 2]), optuna_trial.suggest_categorical('tr_hl', [True, False]), 0.0005
 else:
     hl_price_type, bb_ma_type, bb_len, bb_dev_in, bb_min_w = 'H/L OTT', 'EMA', 20, 2.0, 3.0
     hott_ma_type, hott_len, hott_per, hott_h_len, hott_h_src, h_int = 'EMA', 2, 0.6, 100, 'close', 0
@@ -109,7 +109,7 @@ else:
     ma2_type, ma2_len, ma1_len, tr_ma_type, tr_ma_len, atr_len, atr_len2 = 'EMA', 3, 20, 'EMA', 100, 10, 10
     ll_mult, ll_vol_filter, en_ll_per = 1.5, False, 0.06
     tp_hl_per, sl_hl_per, tp_ll_per, sl_ll_per = 0.015, 0.02, 0.015, 0.015
-    ex_dec, inst, tr_hl, slippage_ticks = 3, 1, True, 3
+    ex_dec, inst, tr_hl, slip_pct = 3, 1, True, 0.0005
 
 bb_mid = calc_ma_vbt(data['Close'], data['Volume'] if 'Volume' in data.columns else None, bb_len, bb_ma_type)
 bb_std = data['Close'].rolling(bb_len).std(ddof=0).values
@@ -157,89 +157,90 @@ ll_p_triggers = (ma2 * (1 - ma1 * ll_mult - en_ll_per) if ll_vol_filter else ma2
 
 # [상태 관리 및 엔진]
 num_cols = 1
-id_arr = np.zeros(num_cols, dtype=np.int32) 
+id_arr = np.zeros(num_cols, dtype=np.int32)
 price_arr = np.zeros(num_cols, dtype=np.float64)
 size_arr = np.zeros(num_cols, dtype=np.float64)
+entry_idx_arr = np.full(num_cols, -1, dtype=np.int64)  # 🚀 [V8.2] 동일 봉 진입-청산 방지용
 
-if 'JIT_COMPILED_ORDER' not in globals():
+if 'JIT_COMPILED_ORDER_V82' not in globals():
     @njit
-    def order_func_nb(c, o, h, l, cl, hlp_t, llp_t, atp, ats, trm, 
-                      inst_num, use_tr, o_m_h, o_m_l, e_m_h, e_m_l, tp_t, sl_t, 
-                      tph, slh, tpl, sll, tpm, slm, slip_ticks, dec, 
-                      id_a, price_a, size_a):
-        
+    def order_func_nb(c, o, h, l, cl, hlp_t, llp_t, atp, ats, trm,
+                      inst_num, use_tr, o_m_h, o_m_l, e_m_h, e_m_l, tp_t, sl_t,
+                      tph, slh, tpl, sll, tpm, slm, slip_pct, dec,
+                      id_a, price_a, size_a, entry_idx_a):
+
         i = c.i; col = c.col
-        # 🚀 [V6.0] 첫 캔들 인덱스 오류(-1 참조) 방지 가드
         if i < 1:
             return vbt.portfolio.nb.order_nothing_nb()
 
         pos = c.position_now; cash = c.cash_now
-        
-        p10 = 10.0**dec; tick = 1.0/p10; slip = slip_ticks * tick
-        
+        p10 = 10.0**dec
+
         if pos == 0:
-            id_a[col] = 0; price_a[col] = 0.0; size_a[col] = 0.0
+            id_a[col] = 0; price_a[col] = 0.0; size_a[col] = 0.0; entry_idx_a[col] = -1
             hlp, llp = hlp_t[i-1], llp_t[i-1]
             if not np.isnan(hlp) and hlp > 0:
                 if (h[i] > hlp if o_m_h == 0 else cl[i] > hlp):
-                    ep = (max(o[i], hlp) if o_m_h == 0 else cl[i]) + slip
-                    # 🚀 [V7.0] 수수료(0.08%) 및 여유분 고려하여 현금의 99.1%만 매수 (초과 지출 방지)
+                    raw_ep = (max(o[i], hlp) if o_m_h == 0 else cl[i])
+                    ep = np.floor(raw_ep * (1.0 + slip_pct) * p10 + 0.5) / p10  # 🚀 [V8.2] % 슬리피지
                     qty = np.floor((cash * 0.991 / ep) * p10 + 0.5) / p10
                     if qty > 0:
-                        id_a[col] = 1; price_a[col] = ep; size_a[col] = qty
+                        id_a[col] = 1; price_a[col] = ep; size_a[col] = qty; entry_idx_a[col] = i
                         return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=0)
             if not np.isnan(llp) and llp > 0:
                 if (l[i] < llp if o_m_l == 0 else cl[i] < llp):
-                    ep = (min(o[i], llp) if o_m_l == 0 else cl[i] + slip)
-                    # 🚀 [V7.0] 수수료 고려 99.1% 비율 적용
+                    raw_ep = (min(o[i], llp) if o_m_l == 0 else cl[i])
+                    ep = np.floor(raw_ep * (1.0 + slip_pct) * p10 + 0.5) / p10  # 🚀 [V8.2] % 슬리피지
                     qty = np.floor((cash * 0.991 / ep) * p10 + 0.5) / p10
                     if qty > 0:
-                        id_a[col] = 2; price_a[col] = ep; size_a[col] = qty
+                        id_a[col] = 2; price_a[col] = ep; size_a[col] = qty; entry_idx_a[col] = i
                         return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=0)
-                
+
         if pos > 0:
+            # 🚀 [V8.2] 동일 봉 진입-청산 원천 차단 (Same-bar exit prevention)
+            if i == entry_idx_a[col]:
+                return vbt.portfolio.nb.order_nothing_nb()
+
             cur_state = id_a[col]
-            if use_tr and cur_state == 1 and not np.isnan(trm[i]) and cl[i] < trm[i] and cl[i-1] >= trm[i-1]:
-                return vbt.portfolio.nb.order_nb(size=-pos, price=cl[i]-slip, size_type=0)
             ep = price_a[col]
-            if cur_state == 1: 
+
+            if use_tr and cur_state == 1 and not np.isnan(trm[i]) and cl[i] < trm[i] and cl[i-1] >= trm[i-1]:
+                exit_p = np.floor(cl[i] * (1.0 - slip_pct) * p10 + 0.5) / p10  # 🚀 [V8.2] % 슬리피지
+                return vbt.portfolio.nb.order_nb(size=-pos, price=exit_p, size_type=0)
+
+            if cur_state == 1:
                 tf, ta = ep*(1+tph), ep + tpm*atp[i]
                 tpp = tf if tp_t==0 else (ta if tp_t==1 else max(tf, ta))
                 sf, sa = ep*(1-slh), ep - slm*ats[i]
                 slp = sf if sl_t==0 else (sa if sl_t==1 else max(sf, sa))
                 exit_mode = e_m_h
-            else: 
+            else:
                 tpp, slp = ep*(1+tpl), ep*(1-sll); exit_mode = e_m_l
+
             if np.isnan(tpp) or np.isnan(slp): return vbt.portfolio.nb.order_nothing_nb()
             is_hit = (h[i] >= tpp or l[i] <= slp) if exit_mode == 0 else (cl[i] >= tpp or cl[i] <= slp)
             if is_hit:
                 is_tp = False
                 if exit_mode == 0:
-                    # 🚀 [V7.0] 충돌 해결: 동일 봉 내 TP/SL 동시 도달 시 시가(Open)에서 더 가까운 쪽 우선 체결
                     if h[i] >= tpp and l[i] <= slp:
-                        # 🚀 [V8.1] bar_magnifier 보수적 특성 반영: 동일 봉 TP/SL 충돌 시 항상 SL 우선
-                        is_tp = False
+                        is_tp = False  # 🚀 [V8.1] SL 우선 (bar_magnifier 보수적 특성)
                     else:
                         is_tp = (h[i] >= tpp)
-                    
                     exit_p = tpp if is_tp else slp
-                    # 시가 갭(Gap) 처리
-                    if (o[i] >= tpp or o[i] <= slp): 
-                        exit_p = o[i]
-                        is_tp = (o[i] >= tpp)
+                    if (o[i] >= tpp or o[i] <= slp):
+                        exit_p = o[i]; is_tp = (o[i] >= tpp)
                 else:
-                    is_tp = (cl[i] >= tpp)
-                    exit_p = cl[i]
-                
-                if exit_mode != 0 or not is_tp:
-                    exit_p -= slip
-                
+                    is_tp = (cl[i] >= tpp); exit_p = cl[i]
+
+                # 🚀 [V8.2] 모든 청산에 % 슬리피지 적용 (수익을 항상 깎아냄)
+                exit_p = np.floor(exit_p * (1.0 - slip_pct) * p10 + 0.5) / p10
+
                 if inst_num == 2 and pos > (np.ceil((size_a[col] * 0.6) * p10) / p10):
                     return vbt.portfolio.nb.order_nb(size=-(np.ceil((pos/2) * p10) / p10), price=exit_p, size_type=0)
                 else:
                     return vbt.portfolio.nb.order_nb(size=-pos, price=exit_p, size_type=0)
         return vbt.portfolio.nb.order_nothing_nb()
-    globals()['JIT_COMPILED_ORDER'] = True
+    globals()['JIT_COMPILED_ORDER_V82'] = True
 
 # 시뮬레이션
 m_map = {'limits': 0, 'close': 1}
@@ -253,8 +254,8 @@ portfolio = vbt.Portfolio.from_order_func(
     data['Close'], order_func_nb,
     o_np, h_np, l_np, c_np, hl_p_triggers, ll_p_triggers, atr_tp, atr_sl, tr_ma,
     inst, tr_hl, o_h_m, o_l_m, e_h_m, e_l_m, tp_h_t, sl_h_t,
-    tp_hl_per, sl_hl_per, tp_ll_per, sl_ll_per, hl_tp_atr_mul, hl_sl_atr_mul, slippage_ticks, ex_dec,
-    id_arr, price_arr, size_arr,
+    tp_hl_per, sl_hl_per, tp_ll_per, sl_ll_per, hl_tp_atr_mul, hl_sl_atr_mul, slip_pct, ex_dec,
+    id_arr, price_arr, size_arr, entry_idx_arr,
     flexible=False, init_cash=500000, cash_sharing=False
 )
 
