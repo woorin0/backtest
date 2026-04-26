@@ -113,7 +113,7 @@ else:
 
 # 🚀 [V9.0] MTF 리샘플링 파이프라인 (Bar Magnifier Parity)
 # 1분봉 데이터를 전략 주기(target_tf)로 리샘플링하여 지표를 계산합니다.
-_tf = globals().get('target_tf', '2h').upper() # 대문자 변환
+_tf = globals().get('target_tf', '2h').lower() # 소문자 변환
 data_htf = data.resample(_tf).agg({
     'Open': 'first', 
     'High': 'max', 
@@ -121,6 +121,24 @@ data_htf = data.resample(_tf).agg({
     'Close': 'last', 
     'Volume': 'sum'
 }).dropna()
+
+if 'JIT_COMPILED_HOTT' not in globals():
+    @njit
+    def calc_hott_nb(mavg_np, percent):
+        n = len(mavg_np); hott = np.full(n, np.nan); lsp, ssp, dv = np.nan, np.nan, 1
+        for i in range(n):
+            ma = mavg_np[i]
+            if np.isnan(ma): continue
+            fk = ma * percent * 0.01; ls, ss = ma - fk, ma + fk
+            if np.isnan(lsp): lsp, ssp = ls, ss; continue
+            if ma > lsp: lsp = max(ls, lsp)
+            if ma < ssp: ssp = min(ss, ssp)
+            if dv == -1 and ma > ssp: dv = 1
+            elif dv == 1 and ma < lsp: dv = -1
+            mt = lsp if dv == 1 else ssp
+            hott[i] = mt * (200 + percent) / 200 if ma > mt else mt * (200 - percent) / 200
+        return hott
+    globals()['JIT_COMPILED_HOTT'] = True
 
 bb_mid_htf = calc_ma_vbt(data_htf['Close'], data_htf['Volume'], bb_len, bb_ma_type)
 bb_std_htf = data_htf['Close'].rolling(bb_len).std(ddof=1).values # ddof=1 (Pine Script Parity)
