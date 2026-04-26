@@ -33,17 +33,27 @@ def create_excel_report(study, data_df):
     # 3. 데이터프레임 변환 및 컬럼 순서 재배치 (Pine Script 순서 동기화)
     report_df = pd.DataFrame(report_rows)
     
-    # 파인스크립트 소스코드와 동일한 논리적 정렬 순서 정의
+    # 🚀 [V7.5] 트레이딩뷰 설정창 UI 순서와 완벽히 동기화된 컬럼 정렬 순서
     PINE_ORDER = [
-        "Rank", "Total Return (%)", "Win Rate (%)", "MDD (%)", "Total Trades", "Total Profit ($)", "Total Fees ($)", # 기본 지표
-        "hl_price", "bb_ma_type", "bb_length", "bb_dev", "bb_min_width",       # Indicator Group 1
-        "hott_ma_type", "hott_length", "hott_percent", "hott_h_length", "hott_h_src", "high_int", # Indicator Group 2
-        "hl_tp_atr_mul", "hl_sl_atr_mul", "open_at_hl", "open_at_ll",           # Strategy Group 1
-        "exit_at_hl", "exit_at_ll", "hl_tp_price", "hl_sl_price",               # Strategy Group 2
-        "ma2_type", "ma2_len", "ma1_len", "tr_ma_type", "tr_ma_len",            # MA Group
-        "atr_length", "atr_length2", "ll_mult", "ll_volatility_filter",         # ATR/Filter Group
-        "entry_ll_per", "tp_hl_per", "sl_hl_per", "tp_ll_per", "sl_ll_per",     # Trigger Group
-        "exchange_decimal", "installment", "tr_hl"                             # System Group
+        # === 기본 성과 지표 ===
+        "Rank", "Total Return (%)", "Win Rate (%)", "MDD (%)", "Total Trades", "Total Profit ($)", "Total Fees ($)",
+        # === BASIC CONDITION ===
+        "hl_price", "open_at_hl", "open_at_ll", "exit_at_hl", "exit_at_ll",
+        "hl_tp_price", "hl_sl_price", "tr_hl",
+        # === LL MOVING AVERAGE ===
+        "ll_volatility_filter", "ma1_len", "ll_mult", "ma2_type", "ma2_len",
+        # === HL BOLLINGER BANDS ===
+        "bb_ma_type", "bb_length", "bb_dev", "bb_min_width",
+        # === HL H/L OTT ===
+        "hott_length", "hott_percent", "hott_h_length", "hott_ma_type", "hott_h_src", "high_int",
+        # === PERCENTAGE ===
+        "entry_ll_per", "tp_hl_per", "tp_ll_per", "sl_hl_per", "sl_ll_per",
+        # === ATR ===
+        "atr_length", "hl_tp_atr_mul", "atr_length2", "hl_sl_atr_mul",
+        # === TR ===
+        "tr_ma_type", "tr_ma_len",
+        # === SIZE ===
+        "exchange_decimal", "installment",
     ]
     
     # 존재하는 컬럼만 필터링하여 순서 적용 (엔진별 파라미터 차이 대응)

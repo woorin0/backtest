@@ -163,7 +163,19 @@ def finalize_optuna_study(self, worker_results, study_name: str, data_path: str,
         excel_output = create_excel_report(study, data)
         
         os.makedirs("results", exist_ok=True)
-        file_path = f"results/Report_{study_name}.xlsx"
+        
+        # 🚀 [V7.5] 파일명에 엔진/심볼/주기/생성일자/순번 포함
+        import datetime as dt
+        today_str = dt.datetime.now().strftime("%Y-%m-%d")
+        safe_symbol = symbol.replace("/", "-")  # 파일명에 슬래시 사용 불가 대응
+        tf_str = ""
+        iter_num = 1
+        if active_task_dict:
+            tf_str = active_task_dict.get("params", {}).get("tf", "")
+            iter_num = active_task_dict.get("current_iter", 1)
+        
+        file_name = f"{engine} {safe_symbol} {tf_str} {today_str}({iter_num}).xlsx"
+        file_path = os.path.join("results", file_name)
         with open(file_path, "wb") as f:
             f.write(excel_output.read())
             

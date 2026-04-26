@@ -5,6 +5,7 @@ import math
 import json
 import time
 import glob
+import io
 import redis
 from dotenv import load_dotenv
 import optuna
@@ -111,9 +112,20 @@ st.text_area("Python Code", key="strategy_code", height=350)
 st.divider()
 
 # 📜 히스토리
-st.markdown("### 📜 리포트 아카이브 (최신 10개)")
+st.markdown("### 📜 리포트 아카이브 (최신 50개)")
 res_files = sorted(glob.glob("results/*.xlsx"), key=os.path.getmtime, reverse=True)
-for i, fp in enumerate(res_files[:10]):
+
+# 🚀 [V7.5] 전체 엑셀 파일 일괄 다운로드 (ZIP)
+if res_files:
+    import zipfile
+    zip_buf = io.BytesIO()
+    with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for fp in res_files[:50]:
+            zf.write(fp, os.path.basename(fp))
+    zip_buf.seek(0)
+    st.download_button("📦 전체 리포트 일괄 다운로드 (ZIP)", zip_buf, "all_reports.zip", mime="application/zip", key="dl_all_zip")
+
+for i, fp in enumerate(res_files[:50]):
     fn = os.path.basename(fp)
     with st.container():
         cols = st.columns([4, 1])
@@ -158,7 +170,7 @@ if btn_start and not active_task:
         active_task_dict = {
             "task_id": "", "worker_ids": worker_ids, "study_name": sn, "n_trials": trials,
             "current_iter": 1, "total_iters": repeat_count,
-            "params": {"dp": dp, "eng": eng, "code": st.session_state["strategy_code"], "trials": trials, "workers": workers, "sym": sym}
+            "params": {"dp": dp, "eng": eng, "code": st.session_state["strategy_code"], "trials": trials, "workers": workers, "sym": sym, "tf": tf}
         }
         res = chord(worker_sigs)(finalize_optuna_study.s(sn, dp, eng, sym, active_task_dict))
         active_task_dict["task_id"] = res.id
