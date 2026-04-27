@@ -29,7 +29,7 @@ def fetch_candles(exchange_id: str, symbol: str, timeframe: str, start_date, end
     """ccxt를 사용하여 지정된 기간 동안의 데이터를 수집 (지표 계산용 Warm-up 패딩 포함)"""
     
     # 캐시 확인
-    cache_path = get_cache_path(exchange_id, symbol, timeframe, start_date, end_date)
+    cache_path = get_cache_path(exchange_id, symbol, timeframe, start_date, end_date, padding_candles=padding_candles)
     if use_cache and os.path.exists(cache_path):
         if progress_bar:
             progress_bar.progress(100, text=f"로컬 캐시에서 데이터를 불러왔습니다: {symbol}")

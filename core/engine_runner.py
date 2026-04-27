@@ -117,7 +117,7 @@ def run_vectorbt(code_str: str, data: pd.DataFrame, optuna_trial=None):
         
         # 거대 참조 객체들만 명시적으로 None 처리하여 GC가 회수하게 함.
         # 루프 방식은 vectorbt 내부 context 객체 등 꼭 필요한 글로벌 변수까지 지워버려 에러를 유발할 수 있음.
-        for safe_key in ['portfolio', 'data', 'stats', 'atr_tp', 'atr_sl']:
+        for safe_key in ['portfolio', 'data', 'data_htf', 'data_ltf', 'stats', 'atr_tp', 'atr_sl']:
             if safe_key in exec_globals:
                 exec_globals[safe_key] = None
         

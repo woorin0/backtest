@@ -72,7 +72,11 @@ def create_excel_report(study, data_df):
         
         for col_num, value in enumerate(report_df.columns.values):
             worksheet.write(0, col_num, value, header_format)
-            column_len = max(report_df[value].astype(str).map(len).max(), len(value)) + 2
+            # 빈 데이터프레임일 경우 에러 방지
+            if not report_df.empty:
+                column_len = max(report_df[value].astype(str).map(len).max(), len(value)) + 2
+            else:
+                column_len = len(value) + 2
             worksheet.set_column(col_num, col_num, column_len)
             
     output.seek(0)

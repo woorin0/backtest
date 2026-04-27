@@ -269,9 +269,9 @@ cl_prev = pd.Series(c_np_htf).shift(1).values
 tr_exit_sig = np.where((c_np_htf < tr_ma_arr) & (cl_prev >= tr_prev), htf_idx, 0)
 
 def align_to_ltf(arr_htf, df_h, df_l):
-    if df_h is df_l: return arr_htf
     # HTF 마감 시점의 지표/신호는 '다음 HTF 캔들' 구간 내내 사용되어야 하므로 shift(1)
     s = pd.Series(arr_htf, index=df_h.index).shift(1)
+    if df_h is df_l: return s.values
     return s.reindex(df_l.index, method='ffill').values
 
 hlp_t = align_to_ltf(hl_p, df_htf, df_ltf)
