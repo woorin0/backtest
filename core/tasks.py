@@ -5,6 +5,7 @@ from celery import Celery
 import optuna
 from core.engine_runner import run_backtest
 from core.notifier import send_discord_alert, send_discord_error, send_discord_progress
+from core.data_fetcher import fetch_candles, get_cache_path, RedisProgress
 from utils.exporter import create_excel_report
 from utils.sheets import push_to_google_sheets
 import redis
@@ -64,6 +65,76 @@ class ProgressCallback:
                     status_redis.expire(lock_key, 86400 * 7)
                     best_val = study.best_value if completed_trials > 0 else 0.0
                     send_discord_progress(self.study_name, self.symbol, th, best_val)
+
+@celery_app.task(bind=True)
+def prepare_mtf_data_task(self, study_name: str, exchange: str, symbol: str, htf: str, ltf: str, 
+                         start_date: str, end_date: str, code_str: str, trials: int, 
+                         workers: int, repeat_count: int, engine: str):
+    """[V9.0] 데이터 수집부터 최적화 가동까지 전체 프로세스를 백그라운드에서 실행"""
+    from celery import uuid, chord
+    progress_key = f"data_fetch_status_{study_name}"
+    rp = RedisProgress(progress_key)
+    
+    try:
+        # 1. HTF 데이터 수집
+        rp.progress(5, f"HTF({htf}) 데이터 수집 중...")
+        data_htf = fetch_candles(exchange, symbol, htf, start_date, end_date, 1000, progress_bar=rp, padding_candles=1000)
+        
+        # 2. LTF 데이터 수집
+        rp.progress(50, f"LTF({ltf}) 데이터 수집 중...")
+        data_ltf = fetch_candles(exchange, symbol, ltf, start_date, end_date, 1000, progress_bar=rp, padding_candles=0)
+        
+        if data_htf is None or data_ltf is None:
+            raise Exception("데이터 수집 실패 (거래소 응답 없음)")
+
+        # 3. 데이터 결합 및 저장
+        rp.progress(90, "데이터 결합 및 저장 중...")
+        dp_htf_cache = get_cache_path(exchange, symbol, htf, start_date, end_date, padding_candles=1000)
+        data_path = f"{dp_htf_cache}_mtf.pkl"
+        pd.to_pickle({'htf': data_htf, 'ltf': data_ltf}, data_path)
+        
+        # 4. 최적화 작업(Chord) 트리거
+        rp.progress(100, "최적화 작업을 큐에 등록 중...")
+        
+        worker_sigs = []
+        worker_ids = []
+        for _ in range(workers):
+            w_id = uuid()
+            sig = run_optuna_worker.s(study_name, data_path, engine, code_str, trials//workers, symbol, trials)
+            sig.set(task_id=w_id)
+            worker_sigs.append(sig)
+            worker_ids.append(w_id)
+            
+        active_task_dict = {
+            "task_id": "", # chord id는 아래에서 할당
+            "worker_ids": worker_ids,
+            "study_name": study_name,
+            "n_trials": trials,
+            "current_iter": 1,
+            "total_iters": repeat_count,
+            "params": {
+                "dp": data_path, "eng": engine, "code": code_str, 
+                "trials": trials, "workers": workers, "sym": symbol, "tf": htf
+            }
+        }
+        
+        # 🚀 [V9.0] Chord 실행 및 ID 업데이트
+        res = chord(worker_sigs)(finalize_optuna_study.s(study_name, data_path, engine, symbol, htf, active_task_dict))
+        active_task_dict["task_id"] = res.id
+        
+        # UI 업데이트를 위해 .active_task.json 파일 갱신
+        cache_file = ".active_task.json"
+        with open(cache_file, "w") as f:
+            json.dump(active_task_dict, f)
+            
+        rp.empty() # 작업 완료 후 상태 삭제
+        return {"status": "SUCCESS", "study_name": study_name}
+        
+    except Exception as e:
+        err_msg = f"데이터 준비 에러: {str(e)}"
+        status_redis.set(progress_key, f"🚨 {err_msg}", ex=3600)
+        send_discord_error(err_msg, pair=symbol, engine=engine)
+        return {"status": "FAILED", "error": err_msg}
 
 @celery_app.task(bind=True)
 def run_optuna_worker(self, study_name: str, data_path: str, engine: str, code_str: str, n_trials: int, symbol: str, total_trials: int):

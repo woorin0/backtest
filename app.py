@@ -97,7 +97,35 @@ def draw_m(p, l, v, color="#007aff"):
 st.divider()
 
 # 🛰️ 엔진 모니터링 섹션 (진행률 강화)
-st.markdown("### 🛰️ 엔진 텔레메트리")
+# ----------------- [백그라운드 로직] -----------------
+CACHE_FILE = ".active_task.json"
+active_task = None
+if os.path.exists(CACHE_FILE):
+    try:
+        with open(CACHE_FILE, "r") as f: 
+            meta = json.load(f)
+        if meta and isinstance(meta, dict) and "task_id" in meta:
+            # [V17] PREPARING 상태가 아닐 때만 실제 Celery 태스크 체크
+            if meta["task_id"] != "PREPARING":
+                task_check = AsyncResult(meta["task_id"], app=celery_app)
+            active_task = meta
+    except Exception:
+        if os.path.exists(CACHE_FILE): os.remove(CACHE_FILE)
+
+if active_task:
+    sn = active_task["study_name"]
+    
+    # [V9.0] 데이터 수집 중 상태 모니터링
+    if active_task.get("task_id") == "PREPARING":
+        fetch_status = status_redis.get(f"data_fetch_status_{sn}")
+        st.info(fetch_status if fetch_status else "백그라운드에서 데이터를 준비하고 있습니다...")
+        if st.button("❌ 준비 중단"):
+            if os.path.exists(CACHE_FILE): os.remove(CACHE_FILE)
+            st.rerun()
+        time.sleep(2)
+        st.rerun()
+        
+    st.markdown("### 🛰️ 엔진 텔레메트리")
 gauge_slot = st.empty()
 status_slot = st.empty()
 diag_slot = st.expander("🔍 워커 상세 진단", expanded=False)
@@ -122,62 +150,36 @@ for i, fp in enumerate(res_files[:10]):
         with open(fp, "rb") as f:
             cols[1].download_button("📥 다운로드", f, fn, key=f"dl_{i}")
 
-# ----------------- [백그라운드 로직] -----------------
-CACHE_FILE = ".active_task.json"
-active_task = None
-if os.path.exists(CACHE_FILE):
-    try:
-        with open(CACHE_FILE, "r") as f: 
-            meta = json.load(f)
-        if meta and isinstance(meta, dict) and "task_id" in meta:
-            task_check = AsyncResult(meta["task_id"], app=celery_app)
-            # [V17] 작업이 완료되어도 연속 루프 로직 및 결과 화면을 띄워주기 위해 active_task 할당
-            active_task = meta
-    except Exception:
-        if os.path.exists(CACHE_FILE): os.remove(CACHE_FILE)
-
 if btn_start and not active_task:
-    from core.data_fetcher import fetch_candles, get_cache_path
+    sn = f"study_{int(time.time())}"
     
-    st.info("데이터 수집 중입니다. (LTF 데이터 수집은 시간이 걸릴 수 있습니다.)")
-    pb = st.progress(0)
-    data_htf = fetch_candles("Binance", sym, tf, date_start, date_end, 1000, progress_bar=pb)
-    pb.empty()
-    st.info("LTF 정밀 데이터 수집 중...")
-    pb2 = st.progress(0)
-    data_ltf = fetch_candles("Binance", sym, ltf, date_start, date_end, 1000, progress_bar=pb2, padding_candles=0)
-    pb2.empty()
+    # 🚀 [V9.0] 데이터 수집 및 최적화를 백그라운드 태스크 하나로 묶어 발사
+    from core.tasks import prepare_mtf_data_task
     
-    if data_htf is not None and not data_htf.empty and data_ltf is not None and not data_ltf.empty:
-        dp_htf = get_cache_path("Binance", sym, tf, date_start, date_end)
-        combined_dp = f"{dp_htf}_mtf.pkl"
-        import pandas as pd
-        pd.to_pickle({'htf': data_htf, 'ltf': data_ltf}, combined_dp)
-        dp = combined_dp
-        sn = f"study_{int(time.time())}"
+    # 임시 상태 저장 (데이터 수집 중임을 알림)
+    active_task_dict = {
+        "task_id": "PREPARING", # 데이터 수집 중 상태 표시용 예약어
+        "worker_ids": [],
+        "study_name": sn,
+        "n_trials": trials,
+        "current_iter": 1,
+        "total_iters": repeat_count,
+        "params": {"eng": eng, "sym": sym, "tf": tf}
+    }
+    
+    with open(CACHE_FILE, "w") as f:
+        json.dump(active_task_dict, f)
         
-        # 🚀 [V7.4] 다중 워커 SQLite 동시 접근에 따른 Alembic 초기화 충돌(IntegrityError) 방지를 위한 사전 생성
-        import optuna
-        optuna.create_study(study_name=sn, storage="sqlite:///optuna_results.db", direction="maximize", load_if_exists=True)
-        # 워커 시그니처 및 ID 사전 생성 (상태 추적용)
-        worker_sigs = []
-        worker_ids = []
-        for _ in range(workers):
-            w_id = uuid()
-            sig = run_optuna_worker.s(sn, dp, eng, st.session_state["strategy_code"], trials//workers, sym, trials)
-            sig.set(task_id=w_id)
-            worker_sigs.append(sig)
-            worker_ids.append(w_id)
-            
-        active_task_dict = {
-            "task_id": "", "worker_ids": worker_ids, "study_name": sn, "n_trials": trials,
-            "current_iter": 1, "total_iters": repeat_count,
-            "params": {"dp": dp, "eng": eng, "code": st.session_state["strategy_code"], "trials": trials, "workers": workers, "sym": sym, "tf": tf}
-        }
-        res = chord(worker_sigs)(finalize_optuna_study.s(sn, dp, eng, sym, tf, active_task_dict))
-        active_task_dict["task_id"] = res.id
-        with open(CACHE_FILE, "w") as f: json.dump(active_task_dict, f)
-        st.rerun()
+    # Celery 태스크 발사 (데이터 수집 -> 최적화 -> 집계까지 원스톱)
+    prepare_mtf_data_task.delay(
+        sn, "Binance", sym, tf, ltf, 
+        date_start.strftime("%Y-%m-%d"), 
+        date_end.strftime("%Y-%m-%d"), 
+        st.session_state["strategy_code"], 
+        trials, workers, repeat_count, eng
+    )
+    
+    st.rerun()
 
 if active_task:
     tk = AsyncResult(active_task["task_id"], app=celery_app)

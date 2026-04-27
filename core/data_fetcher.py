@@ -4,6 +4,19 @@ import streamlit as st
 import time
 import os
 import hashlib
+import redis
+
+# Redis 연결 (기존 db=2 사용)
+status_redis = redis.Redis(host='localhost', port=6379, db=2, decode_responses=True)
+
+class RedisProgress:
+    """Streamlit의 progress_bar와 동일한 인터페이스를 가지며 Redis에 진행 상황을 기록"""
+    def __init__(self, key):
+        self.key = key
+    def progress(self, value, text=""):
+        status_redis.set(self.key, f"📊 {text} ({value}%)", ex=600)
+    def empty(self):
+        status_redis.delete(self.key)
 
 CACHE_DIR = "cache"
 
