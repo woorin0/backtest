@@ -147,7 +147,14 @@ if os.path.exists(CACHE_FILE):
     except Exception:
         if os.path.exists(CACHE_FILE): os.remove(CACHE_FILE)
 
-if btn_start and not active_task:
+if btn_start:
+    # [V18] 시작 버튼을 누르면 무조건 이전 찌꺼기 캐시를 강제 초기화하여 Lock 현상 완벽 방어
+    if os.path.exists(CACHE_FILE):
+        os.remove(CACHE_FILE)
+    if "final_result" in st.session_state:
+        del st.session_state["final_result"]
+    active_task = None
+    
     from core.data_fetcher import fetch_candles, get_cache_path
     target_tf = tf # 🚀 [V9.0] 지표 계산용 원래 주기 보관
     data = fetch_candles("Binance", sym, "1m", date_start, date_end, 1000)
@@ -155,7 +162,7 @@ if btn_start and not active_task:
         dp = get_cache_path("Binance", sym, "1m", date_start, date_end)
         sn = f"study_{int(time.time())}"
         
-        # 🚀 [V7.4] 다중 워커 SQLite 동시 접근에 따른 Alembic 초기화 충돌(IntegrityError) 방지를 위한 사전 생성
+        # 🚀 [V7.4] 다중 워커 SQLite 동시 접근에 따른 Alembic 초기화 충돌 방지를 위한 사전 생성
         import optuna
         optuna.create_study(study_name=sn, storage="sqlite:///optuna_results.db", direction="maximize", load_if_exists=True)
         # 워커 시그니처 및 ID 사전 생성 (상태 추적용)
@@ -177,6 +184,9 @@ if btn_start and not active_task:
         res = chord(worker_sigs)(finalize_optuna_study.s(sn, dp, eng, sym, active_task_dict))
         active_task_dict["task_id"] = res.id
         with open(CACHE_FILE, "w") as f: json.dump(active_task_dict, f)
+        
+        # 새로운 태스크 할당 처리
+        active_task = active_task_dict
         st.rerun()
 
 if active_task:
