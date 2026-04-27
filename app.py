@@ -172,9 +172,9 @@ if btn_start and not active_task:
         active_task_dict = {
             "task_id": "", "worker_ids": worker_ids, "study_name": sn, "n_trials": trials,
             "current_iter": 1, "total_iters": repeat_count,
-            "params": {"dp": dp, "eng": eng, "code": st.session_state["strategy_code"], "trials": trials, "workers": workers, "sym": sym}
+            "params": {"dp": dp, "eng": eng, "code": st.session_state["strategy_code"], "trials": trials, "workers": workers, "sym": sym, "tf": tf}
         }
-        res = chord(worker_sigs)(finalize_optuna_study.s(sn, dp, eng, sym, active_task_dict))
+        res = chord(worker_sigs)(finalize_optuna_study.s(sn, dp, eng, sym, tf, active_task_dict))
         active_task_dict["task_id"] = res.id
         with open(CACHE_FILE, "w") as f: json.dump(active_task_dict, f)
         st.rerun()

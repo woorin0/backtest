@@ -6,6 +6,7 @@ import optuna
 from core.engine_runner import run_backtest
 from core.notifier import send_discord_alert, send_discord_error, send_discord_progress
 from utils.exporter import create_excel_report
+from utils.sheets import push_to_google_sheets
 import redis
 import json
 import subprocess
@@ -150,7 +151,7 @@ def run_optuna_worker(self, study_name: str, data_path: str, engine: str, code_s
         return {"error": error_msg}
 
 @celery_app.task(bind=True)
-def finalize_optuna_study(self, worker_results, study_name: str, data_path: str, engine: str, symbol: str, active_task_dict: dict = None):
+def finalize_optuna_study(self, worker_results, study_name: str, data_path: str, engine: str, symbol: str, timeframe: str, active_task_dict: dict = None):
     # [방어 로직] 실행 시점에 한 번 더 체크
     try: import xlsxwriter
     except ImportError: subprocess.check_call([sys.executable, "-m", "pip", "install", "xlsxwriter"])
@@ -160,7 +161,13 @@ def finalize_optuna_study(self, worker_results, study_name: str, data_path: str,
         data = pd.read_pickle(data_path)
         
         # 🚨 고성능 엑셀 리포트 생성 (상위 50개 상세 데이터 포함)
-        excel_output = create_excel_report(study, data)
+        excel_output, report_df = create_excel_report(study, data)
+        
+        # 🚀 [V8.0] 구글 시트 전송
+        try:
+            push_to_google_sheets(report_df, engine, symbol, timeframe)
+        except Exception as e:
+            print(f"[Google Sheets Error] {str(e)}")
         
         os.makedirs("results", exist_ok=True)
         file_path = f"results/Report_{study_name}.xlsx"
@@ -204,7 +211,7 @@ def finalize_optuna_study(self, worker_results, study_name: str, data_path: str,
                 next_active_task["study_name"] = next_sn
                 next_active_task["worker_ids"] = worker_ids
                 
-                res = chord(worker_sigs)(finalize_optuna_study.s(next_sn, params["dp"], params["eng"], params["sym"], next_active_task))
+                res = chord(worker_sigs)(finalize_optuna_study.s(next_sn, params["dp"], params["eng"], params["sym"], params["tf"], next_active_task))
                 next_active_task["task_id"] = res.id
                 
                 # 디스크 파일 덮어쓰기 (프론트엔드가 깨어나면 이 파일을 읽고 최신 상태 인지)

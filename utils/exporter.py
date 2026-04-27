@@ -76,7 +76,7 @@ def create_excel_report(study, data_df):
             worksheet.set_column(col_num, col_num, column_len)
             
     output.seek(0)
-    return output
+    return output, report_df
 
 # 기존 함수 유지 (호환성용)
 def create_excel_buffer(data, results):
