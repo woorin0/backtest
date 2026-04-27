@@ -286,7 +286,7 @@ portfolio = vbt.Portfolio.from_order_func(
     inst, tr_hl, o_h_m, o_l_m, e_h_m, e_l_m, tp_h_t, sl_h_t,
     tp_hl_per, sl_hl_per, tp_ll_per, sl_ll_per, hl_tp_atr_mul, hl_sl_atr_mul, slip_pct, ex_dec,
     id_arr, price_arr, size_arr, entry_idx_arr,
-    flexible=False, init_cash=500000, cash_sharing=False, fees=0.001  # 🚀 [V9.2] 수수료 0.1% 적용
+    flexible=False, init_cash=500000, cash_sharing=False  # 🚀 [V9.2] 수수료는 전역 세팅으로 적용
 )
 stats = portfolio.stats()
 metrics = {
