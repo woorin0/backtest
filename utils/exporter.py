@@ -2,39 +2,20 @@ import pandas as pd
 import io
 import optuna
 
-# 🚀 [V7.5] 트레이딩뷰 설정창 UI 순서와 완벽히 동기화된 컬럼 정렬 순서
-PINE_ORDER = [
-    # === 기본 성과 지표 ===
-    "Rank", "Total Return (%)", "Win Rate (%)", "MDD (%)", "Total Trades", "Total Profit ($)", "Total Fees ($)",
-    # === BASIC CONDITION ===
-    "hl_price", "open_at_hl", "open_at_ll", "exit_at_hl", "exit_at_ll",
-    "hl_tp_price", "hl_sl_price", "tr_hl",
-    # === LL MOVING AVERAGE ===
-    "ll_volatility_filter", "ma1_len", "ll_mult", "ma2_type", "ma2_len",
-    # === HL BOLLINGER BANDS ===
-    "bb_ma_type", "bb_length", "bb_dev", "bb_min_width",
-    # === HL H/L OTT ===
-    "hott_length", "hott_percent", "hott_h_length", "hott_ma_type", "hott_h_src", "high_int",
-    # === PERCENTAGE ===
-    "entry_ll_per", "tp_hl_per", "tp_ll_per", "sl_hl_per", "sl_ll_per",
-    # === ATR ===
-    "atr_length", "hl_tp_atr_mul", "atr_length2", "hl_sl_atr_mul",
-    # === TR ===
-    "tr_ma_type", "tr_ma_len",
-    # === SIZE ===
-    "exchange_decimal", "installment",
-]
-
-def create_report_dataframe(study):
-    """🚀 [V8.0] Optuna Study에서 상위 100개 전략의 DataFrame을 생성하는 공용 함수.
-    엑셀 리포트와 구글 시트 전송 모듈이 함께 사용합니다."""
+def create_excel_report(study, data_df):
+    """Optuna Study의 상위 100개 전략 상세 지표를 포함한 전문 엑셀 리포트 생성"""
     
+    # 1. 완료된 Trial들만 추출하여 수익률(value) 기준 내림차순 정렬
     trials = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
     trials.sort(key=lambda t: t.value if t.value is not None else -9999, reverse=True)
+    
+    # 상위 100개 선정
     top_trials = trials[:100]
     
+    # 2. 리포트 데이터 생성
     report_rows = []
     for t in top_trials:
+        # 기본 정보 (Rank 및 핵심 지표)
         row = {
             "Rank": len(report_rows) + 1,
             "Total Return (%)": round(t.value, 2) if t.value is not None else 0.0,
@@ -44,22 +25,32 @@ def create_report_dataframe(study):
             "Total Profit ($)": t.user_attrs.get("Total Profit", 0.0),
             "Total Fees ($)": round(t.user_attrs.get("Total Fees", 0.0), 2)
         }
+        
+        # 전략 파라미터 (Params)
         row.update(t.params)
         report_rows.append(row)
     
+    # 3. 데이터프레임 변환 및 컬럼 순서 재배치 (Pine Script 순서 동기화)
     report_df = pd.DataFrame(report_rows)
     
-    # 컬럼 순서 정렬 (트레이딩뷰 UI 순서)
+    # 파인스크립트 소스코드와 동일한 논리적 정렬 순서 정의
+    PINE_ORDER = [
+        "Rank", "Total Return (%)", "Win Rate (%)", "MDD (%)", "Total Trades", "Total Profit ($)", "Total Fees ($)", # 기본 지표
+        "hl_price", "bb_ma_type", "bb_length", "bb_dev", "bb_min_width",       # Indicator Group 1
+        "hott_ma_type", "hott_length", "hott_percent", "hott_h_length", "hott_h_src", "high_int", # Indicator Group 2
+        "hl_tp_atr_mul", "hl_sl_atr_mul", "open_at_hl", "open_at_ll",           # Strategy Group 1
+        "exit_at_hl", "exit_at_ll", "hl_tp_price", "hl_sl_price",               # Strategy Group 2
+        "ma2_type", "ma2_len", "ma1_len", "tr_ma_type", "tr_ma_len",            # MA Group
+        "atr_length", "atr_length2", "ll_mult", "ll_volatility_filter",         # ATR/Filter Group
+        "entry_ll_per", "tp_hl_per", "sl_hl_per", "tp_ll_per", "sl_ll_per",     # Trigger Group
+        "exchange_decimal", "installment", "tr_hl"                             # System Group
+    ]
+    
+    # 존재하는 컬럼만 필터링하여 순서 적용 (엔진별 파라미터 차이 대응)
     final_columns = [col for col in PINE_ORDER if col in report_df.columns]
+    # 명시되지 않은 나머지 컬럼이 있다면 뒤에 붙임
     remaining_columns = [col for col in report_df.columns if col not in PINE_ORDER]
     report_df = report_df[final_columns + remaining_columns]
-    
-    return report_df
-
-def create_excel_report(study, data_df):
-    """Optuna Study의 상위 100개 전략 상세 지표를 포함한 전문 엑셀 리포트 생성"""
-    
-    report_df = create_report_dataframe(study)
     
     # 4. 바이트 스트림으로 저장
     output = io.BytesIO()

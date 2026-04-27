@@ -5,7 +5,6 @@ import math
 import json
 import time
 import glob
-import io
 import redis
 from dotenv import load_dotenv
 import optuna
@@ -39,7 +38,8 @@ with st.sidebar:
     st.title("⚙️ Control Panel")
     eng = st.selectbox("엔진", ["Vectorbt", "Backtrader"], key="engine_sel")
     sym = st.text_input("심볼", "BTC/USDT")
-    tf = st.selectbox("주기", ["15m", "30m", "1h", "2h", "4h"])
+    tf = st.selectbox("주기 (HTF)", ["15m", "30m", "1h", "2h", "4h"])
+    ltf = st.selectbox("체결 정밀도 (LTF)", ["1m", "3m", "5m", "15m"], index=2)
     trials = st.number_input("탐색수", 10, 100000, 100)
     workers = st.number_input("워커 수 (병렬 엔진)", 2, 8, 4)
     repeat_count = st.number_input("반복수 (자동 연속 실행)", 1, 10, 1)
@@ -112,20 +112,9 @@ st.text_area("Python Code", key="strategy_code", height=350)
 st.divider()
 
 # 📜 히스토리
-st.markdown("### 📜 리포트 아카이브 (최신 50개)")
+st.markdown("### 📜 리포트 아카이브 (최신 10개)")
 res_files = sorted(glob.glob("results/*.xlsx"), key=os.path.getmtime, reverse=True)
-
-# 🚀 [V7.5] 전체 엑셀 파일 일괄 다운로드 (ZIP)
-if res_files:
-    import zipfile
-    zip_buf = io.BytesIO()
-    with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zf:
-        for fp in res_files[:50]:
-            zf.write(fp, os.path.basename(fp))
-    zip_buf.seek(0)
-    st.download_button("📦 전체 리포트 일괄 다운로드 (ZIP)", zip_buf, "all_reports.zip", mime="application/zip", key="dl_all_zip")
-
-for i, fp in enumerate(res_files[:50]):
+for i, fp in enumerate(res_files[:10]):
     fn = os.path.basename(fp)
     with st.container():
         cols = st.columns([4, 1])
@@ -147,22 +136,27 @@ if os.path.exists(CACHE_FILE):
     except Exception:
         if os.path.exists(CACHE_FILE): os.remove(CACHE_FILE)
 
-if btn_start:
-    # [V18] 시작 버튼을 누르면 무조건 이전 찌꺼기 캐시를 강제 초기화하여 Lock 현상 완벽 방어
-    if os.path.exists(CACHE_FILE):
-        os.remove(CACHE_FILE)
-    if "final_result" in st.session_state:
-        del st.session_state["final_result"]
-    active_task = None
-    
+if btn_start and not active_task:
     from core.data_fetcher import fetch_candles, get_cache_path
-    target_tf = tf # 🚀 [V9.0] 지표 계산용 원래 주기 보관
-    data = fetch_candles("Binance", sym, "1m", date_start, date_end, 1000)
-    if data is not None and not data.empty:
-        dp = get_cache_path("Binance", sym, "1m", date_start, date_end)
+    
+    st.info("데이터 수집 중입니다. (LTF 데이터 수집은 시간이 걸릴 수 있습니다.)")
+    pb = st.progress(0)
+    data_htf = fetch_candles("Binance", sym, tf, date_start, date_end, 1000, progress_bar=pb)
+    pb.empty()
+    st.info("LTF 정밀 데이터 수집 중...")
+    pb2 = st.progress(0)
+    data_ltf = fetch_candles("Binance", sym, ltf, date_start, date_end, 1000, progress_bar=pb2, padding_candles=0)
+    pb2.empty()
+    
+    if data_htf is not None and not data_htf.empty and data_ltf is not None and not data_ltf.empty:
+        dp_htf = get_cache_path("Binance", sym, tf, date_start, date_end)
+        combined_dp = f"{dp_htf}_mtf.pkl"
+        import pandas as pd
+        pd.to_pickle({'htf': data_htf, 'ltf': data_ltf}, combined_dp)
+        dp = combined_dp
         sn = f"study_{int(time.time())}"
         
-        # 🚀 [V7.4] 다중 워커 SQLite 동시 접근에 따른 Alembic 초기화 충돌 방지를 위한 사전 생성
+        # 🚀 [V7.4] 다중 워커 SQLite 동시 접근에 따른 Alembic 초기화 충돌(IntegrityError) 방지를 위한 사전 생성
         import optuna
         optuna.create_study(study_name=sn, storage="sqlite:///optuna_results.db", direction="maximize", load_if_exists=True)
         # 워커 시그니처 및 ID 사전 생성 (상태 추적용)
@@ -170,8 +164,7 @@ if btn_start:
         worker_ids = []
         for _ in range(workers):
             w_id = uuid()
-            # 🚀 [V9.0] target_tf(원본 주기) 추가 전달
-            sig = run_optuna_worker.s(sn, dp, eng, st.session_state["strategy_code"], trials//workers, sym, trials, target_tf)
+            sig = run_optuna_worker.s(sn, dp, eng, st.session_state["strategy_code"], trials//workers, sym, trials)
             sig.set(task_id=w_id)
             worker_sigs.append(sig)
             worker_ids.append(w_id)
@@ -179,14 +172,11 @@ if btn_start:
         active_task_dict = {
             "task_id": "", "worker_ids": worker_ids, "study_name": sn, "n_trials": trials,
             "current_iter": 1, "total_iters": repeat_count,
-            "params": {"dp": dp, "eng": eng, "code": st.session_state["strategy_state" if "strategy_state" in st.session_state else "strategy_code"], "trials": trials, "workers": workers, "sym": sym, "tf": target_tf}
+            "params": {"dp": dp, "eng": eng, "code": st.session_state["strategy_code"], "trials": trials, "workers": workers, "sym": sym}
         }
         res = chord(worker_sigs)(finalize_optuna_study.s(sn, dp, eng, sym, active_task_dict))
         active_task_dict["task_id"] = res.id
         with open(CACHE_FILE, "w") as f: json.dump(active_task_dict, f)
-        
-        # 새로운 태스크 할당 처리
-        active_task = active_task_dict
         st.rerun()
 
 if active_task:

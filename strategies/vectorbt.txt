@@ -2,16 +2,13 @@ import vectorbt as vbt
 import pandas as pd
 import numpy as np
 from numba import njit
-import math
 
 # ==========================================
-# [The Real 100.0% Parity v4.7] 
-# Vectorbt Hardened Fix - AttributeError & JIT 완결
+# [Dual Long - Pine Script 100% Parity v5.0]
 # ==========================================
 
-# [메모리 누수 방지] Numba JIT 컴파일 결과를 캐싱하여 반복 재컴파일(OOM) 원천 차단
-if 'JIT_COMPILED' not in globals():
-    # [지표 엔진: NaN-Safe]
+# [메모리 누수 방지] Numba JIT 컴파일 결과 전역 캐싱
+if 'JIT_COMPILED_V5' not in globals():
     @njit
     def n_sma(s, l):
         res = np.full(len(s), np.nan)
@@ -25,38 +22,34 @@ if 'JIT_COMPILED' not in globals():
 
     @njit
     def n_ema(s, l):
-        res = np.full(len(s), np.nan); alpha = 2.0 / (l + 1.0); last_val = np.nan
+        res = np.full(len(s), np.nan)
+        alpha = 2.0 / (l + 1.0); last_val = np.nan
         for i in range(len(s)):
             if np.isnan(s[i]): continue
-            if np.isnan(last_val): 
-                res[i] = s[i]; last_val = s[i]
-            else:
-                res[i] = alpha * s[i] + (1.0 - alpha) * last_val
-                last_val = res[i]
+            if np.isnan(last_val): res[i] = s[i]; last_val = s[i]
+            else: res[i] = alpha * s[i] + (1.0 - alpha) * last_val; last_val = res[i]
         return res
 
     @njit
     def n_rma(s, l):
-        res = np.full(len(s), np.nan); alpha = 1.0 / l; last_val = np.nan
+        res = np.full(len(s), np.nan)
+        alpha = 1.0 / l; last_val = np.nan
         for i in range(len(s)):
             if np.isnan(s[i]): continue
-            if np.isnan(last_val):
-                res[i] = s[i]; last_val = s[i]
-            else:
-                res[i] = alpha * s[i] + (1.0 - alpha) * last_val
-                last_val = res[i]
+            if np.isnan(last_val): res[i] = s[i]; last_val = s[i]
+            else: res[i] = alpha * s[i] + (1.0 - alpha) * last_val; last_val = res[i]
         return res
 
     @njit
     def n_wma(s, l):
-        res = np.full(len(s), np.nan); w_sum = (l * (l + 1)) / 2
+        res = np.full(len(s), np.nan)
+        w_sum = (l * (l + 1)) / 2
         for i in range(len(s)):
             if i < l - 1: continue
             dot_p = 0.0; valid = True
             for j in range(l):
                 val = s[i - l + 1 + j]
-                if np.isnan(val): 
-                    valid = False; break
+                if np.isnan(val): valid = False; break
                 dot_p += val * (j + 1)
             if valid: res[i] = dot_p / w_sum
         return res
@@ -65,231 +58,433 @@ if 'JIT_COMPILED' not in globals():
     def n_vwma(c_p, v_p, l):
         cv = c_p * v_p
         res_cv = n_sma(cv, l); res_v = n_sma(v_p, l)
-        return res_cv / res_v
+        mask = res_v != 0
+        result = np.full(len(c_p), np.nan)
+        for i in range(len(result)):
+            if mask[i] and not np.isnan(res_cv[i]):
+                result[i] = res_cv[i] / res_v[i]
+        return result
 
-    def calc_ma_vbt(s, v, l, t):
-        if t == 'SMA': return n_sma(s.values, l)
-        elif t == 'EMA': return n_ema(s.values, l)
-        elif t == 'SMMA (RMA)': return n_rma(s.values, l)
-        elif t == 'WMA': return n_wma(s.values, l)
-        elif t == 'VWMA': return n_vwma(s.values, v.values if v is not None else np.ones(len(s)), l)
-        return n_sma(s.values, l)
-    
-    globals()['JIT_COMPILED'] = True
-
-# [데이터 로드]
-c_np, h_np, l_np, o_np = data['Close'].values, data['High'].values, data['Low'].values, data['Open'].values
-# 파라미터 로드 (Optuna 대응)
-if 'optuna_trial' in globals() and optuna_trial:
-    hl_price_type = optuna_trial.suggest_categorical('hl_price', ['BB', 'H/L OTT', 'MAX'])
-    bb_ma_type, bb_len = optuna_trial.suggest_categorical('bb_ma_type', ['SMA', 'EMA', 'SMMA (RMA)', 'WMA', 'VWMA']), optuna_trial.suggest_int('bb_length', 10, 50)
-    bb_dev_in, bb_min_w = optuna_trial.suggest_float('bb_dev', 1.0, 3.0, step=0.1), optuna_trial.suggest_float('bb_min_width', 1.0, 5.0, step=0.1)
-    hott_ma_type, hott_len = optuna_trial.suggest_categorical('hott_ma_type', ['SMA', 'EMA', 'SMMA (RMA)', 'WMA', 'VWMA']), optuna_trial.suggest_int('hott_length', 1, 10)
-    hott_per, hott_h_len = optuna_trial.suggest_float('hott_percent', 0.1, 2.0, step=0.1), optuna_trial.suggest_int('hott_h_length', 50, 300)
-    hott_h_src, h_int = optuna_trial.suggest_categorical('hott_h_src', ['High', 'close']), optuna_trial.suggest_int('high_int', 0, 1)
-    hl_tp_atr_mul = optuna_trial.suggest_float('hl_tp_atr_mul', 1.0, 6.0, step=0.1)
-    hl_sl_atr_mul = optuna_trial.suggest_float('hl_sl_atr_mul', 1.0, 6.0, step=0.1)
-    o_m_hl, o_m_ll = optuna_trial.suggest_categorical('open_at_hl', ['limits', 'close']), optuna_trial.suggest_categorical('open_at_ll', ['limits', 'close'])
-    e_m_hl, e_m_ll = optuna_trial.suggest_categorical('exit_at_hl', ['limits', 'close']), optuna_trial.suggest_categorical('exit_at_ll', ['limits', 'close'])
-    tp_hl_type, sl_hl_type = optuna_trial.suggest_categorical('hl_tp_price', ['Fixed', 'ATR', 'both']), optuna_trial.suggest_categorical('hl_sl_price', ['Fixed', 'ATR', 'both'])
-    ma2_type, ma2_len, ma1_len = optuna_trial.suggest_categorical('ma2_type', ['SMA', 'EMA', 'SMMA (RMA)', 'WMA', 'VWMA']), optuna_trial.suggest_int('ma2_len', 1, 10), optuna_trial.suggest_int('ma1_len', 10, 50)
-    tr_ma_type, tr_ma_len = optuna_trial.suggest_categorical('tr_ma_type', ['SMA', 'EMA', 'SMMA (RMA)', 'WMA', 'VWMA']), optuna_trial.suggest_int('tr_ma_len', 50, 200)
-    atr_len, atr_len2 = optuna_trial.suggest_int('atr_length', 7, 20), optuna_trial.suggest_int('atr_length2', 7, 20)
-    ll_mult, ll_vol_filter = optuna_trial.suggest_float('ll_mult', 1.0, 3.0, step=0.1), optuna_trial.suggest_categorical('ll_volatility_filter', [True, False])
-    en_ll_per = optuna_trial.suggest_float('entry_ll_per', 0.02, 0.15, step=0.001)
-    tp_hl_per, sl_hl_per = optuna_trial.suggest_float('tp_hl_per', 0.005, 0.05, step=0.001), optuna_trial.suggest_float('sl_hl_per', 0.01, 0.07, step=0.001)
-    tp_ll_per, sl_ll_per = optuna_trial.suggest_float('tp_ll_per', 0.005, 0.05, step=0.001), optuna_trial.suggest_float('sl_ll_per', 0.01, 0.07, step=0.001)
-    ex_dec, inst, tr_hl, slip_pct = optuna_trial.suggest_int('exchange_decimal', 1, 8), optuna_trial.suggest_categorical('installment', [1, 2]), optuna_trial.suggest_categorical('tr_hl', [True, False]), 0.0005
-else:
-    hl_price_type, bb_ma_type, bb_len, bb_dev_in, bb_min_w = 'H/L OTT', 'EMA', 20, 2.0, 3.0
-    hott_ma_type, hott_len, hott_per, hott_h_len, hott_h_src, h_int = 'EMA', 2, 0.6, 100, 'close', 0
-    hl_tp_atr_mul, hl_sl_atr_mul = 2.0, 4.0
-    o_m_hl, o_m_ll, e_m_hl, e_m_ll = 'limits', 'limits', 'close', 'limits'
-    tp_hl_type, sl_hl_type = 'both', 'both'
-    ma2_type, ma2_len, ma1_len, tr_ma_type, tr_ma_len, atr_len, atr_len2 = 'EMA', 3, 20, 'EMA', 100, 10, 10
-    ll_mult, ll_vol_filter, en_ll_per = 1.5, False, 0.06
-    tp_hl_per, sl_hl_per, tp_ll_per, sl_ll_per = 0.015, 0.02, 0.015, 0.015
-    ex_dec, inst, tr_hl, slip_pct = 3, 1, True, 0.0005
-
-# 🚀 [V9.0] MTF 리샘플링 파이프라인 (Bar Magnifier Parity)
-# 1분봉 데이터를 전략 주기(target_tf)로 리샘플링하여 지표를 계산합니다.
-_tf = globals().get('target_tf', '2h').lower() # 소문자 변환
-data_htf = data.resample(_tf).agg({
-    'Open': 'first', 
-    'High': 'max', 
-    'Low': 'min', 
-    'Close': 'last', 
-    'Volume': 'sum'
-}).dropna()
-
-if 'JIT_COMPILED_HOTT' not in globals():
+    # HOTT 상태머신 - Pine Script 100% 재현
+    # [핵심 수정] Pine Script 원본:
+    #   longStop = MAvg - fark  (매 봉 현재값으로 base 초기화)
+    #   longStop := MAvg > longStopPrev ? max(longStop, longStopPrev) : longStop
+    #   → else 케이스: longStop = MAvg-fark (현재봉 값, 이전값 유지 아님)
     @njit
     def calc_hott_nb(mavg_np, percent):
-        n = len(mavg_np); hott = np.full(n, np.nan); lsp, ssp, dv = np.nan, np.nan, 1
+        n = len(mavg_np)
+        hott = np.full(n, np.nan)
+        lsp = np.nan; ssp = np.nan; dv = 1
+        first = True
         for i in range(n):
             ma = mavg_np[i]
             if np.isnan(ma): continue
-            fk = ma * percent * 0.01; ls, ss = ma - fk, ma + fk
-            if np.isnan(lsp): lsp, ssp = ls, ss; continue
-            if ma > lsp: lsp = max(ls, lsp)
-            if ma < ssp: ssp = min(ss, ssp)
+            fk = ma * percent * 0.01
+            ls = ma - fk; ss = ma + fk
+            if first:
+                lsp = ls; ssp = ss; first = False; continue
+            # Pine: longStop := MAvg > longStopPrev ? max(longStop, longStopPrev) : longStop
+            # 'else longStop' = base longStop = current MAvg - fark = ls
+            if ma > lsp:
+                lsp = max(ls, lsp)   # 상승 추세: 라인을 올림 (내려오지 않음)
+            else:
+                lsp = ls             # 추세 꺾임 or 보합: 현재 MAvg-fark로 리셋
+            # Pine: shortStop := MAvg < shortStopPrev ? min(shortStop, shortStopPrev) : shortStop
+            if ma < ssp:
+                ssp = min(ss, ssp)   # 하락 추세: 라인을 내림 (올라오지 않음)
+            else:
+                ssp = ss             # 추세 꺾임 or 보합: 현재 MAvg+fark로 리셋
+            # dir 상태 전환
             if dv == -1 and ma > ssp: dv = 1
             elif dv == 1 and ma < lsp: dv = -1
             mt = lsp if dv == 1 else ssp
             hott[i] = mt * (200 + percent) / 200 if ma > mt else mt * (200 - percent) / 200
         return hott
-    globals()['JIT_COMPILED_HOTT'] = True
 
-bb_mid_htf = calc_ma_vbt(data_htf['Close'], data_htf['Volume'], bb_len, bb_ma_type)
-bb_std_htf = data_htf['Close'].rolling(bb_len).std(ddof=1).values # ddof=1 (Pine Script Parity)
-bb_dev_htf = np.maximum(bb_std_htf * bb_dev_in, bb_mid_htf * bb_min_w / 100.0)
-bb_u_htf = bb_mid_htf + bb_dev_htf
+    globals()['JIT_COMPILED_V5'] = True
 
-h_src_htf = data_htf['High'] if hott_h_src == 'High' else data_htf['Close']
-mavg_h_pre_htf = h_src_htf.rolling(hott_h_len).max()
-mavg_h_np_htf = calc_ma_vbt(mavg_h_pre_htf, data_htf['Volume'], hott_len, hott_ma_type)
-hott_v_htf = calc_hott_nb(mavg_h_np_htf, hott_per)
-
-hott_s_htf = np.full_like(hott_v_htf, np.nan)
-if h_int > 0: hott_s_htf[h_int:] = hott_v_htf[:-h_int]
-else: hott_s_htf = hott_v_htf.copy()
-
-atr_tp_htf = vbt.ATR.run(data_htf['High'], data_htf['Low'], data_htf['Close'], window=atr_len).atr.values
-atr_sl_htf = vbt.ATR.run(data_htf['High'], data_htf['Low'], data_htf['Close'], window=atr_len2).atr.values
-ma1_htf = ((data_htf['High'] - data_htf['Low']) / data_htf['Close'].replace(0, 0.0001)).rolling(ma1_len).mean().values
-ma2_htf = calc_ma_vbt(data_htf['Close'], data_htf['Volume'], ma2_len, ma2_type)
-tr_ma_htf = calc_ma_vbt(data_htf['Close'], data_htf['Volume'], tr_ma_len, tr_ma_type)
-
-# 🚀 [V9.1] Alignment: 상위 타임프레임 지표를 1분봉 인덱스로 확장 (미래 참조 완벽 차단)
-def align_to_1m(htf_arr, source_idx, target_idx):
-    s = pd.Series(htf_arr, index=source_idx)
-    # 1. 2시간봉 데이터를 1칸(2시간) 뒤로 밀어서, 캔들이 완성된 이후에만 참조되게 함
-    s_shifted = s.shift(1) 
-    # 2. 밀어낸 과거 데이터를 1분봉 인덱스에 맞춰 빈칸 채우기 (ffill)
-    return s_shifted.reindex(target_idx, method='ffill').values
-
-bb_u = align_to_1m(bb_u_htf, data_htf.index, data.index)
-hott_s = align_to_1m(hott_s_htf, data_htf.index, data.index)
-atr_tp = align_to_1m(atr_tp_htf, data_htf.index, data.index)
-atr_sl = align_to_1m(atr_sl_htf, data_htf.index, data.index)
-ma1 = align_to_1m(ma1_htf, data_htf.index, data.index)
-ma2 = align_to_1m(ma2_htf, data_htf.index, data.index)
-tr_ma = align_to_1m(tr_ma_htf, data_htf.index, data.index)
-
-hl_p_triggers = (hott_s if hl_price_type == 'H/L OTT' else (bb_u if hl_price_type == 'BB' else np.maximum(hott_s, bb_u)))
-ll_p_triggers = (ma2 * (1 - ma1 * ll_mult - en_ll_per) if ll_vol_filter else ma2 * (1 - en_ll_per))
-
-# [상태 관리 및 엔진]
-num_cols = 1
-id_arr = np.zeros(num_cols, dtype=np.int32)
-price_arr = np.zeros(num_cols, dtype=np.float64)
-size_arr = np.zeros(num_cols, dtype=np.float64)
-entry_idx_arr = np.full(num_cols, -1, dtype=np.int64)  # 🚀 [V8.2] 동일 봉 진입-청산 방지용
-
-if 'JIT_COMPILED_ORDER_V82' not in globals():
+# Pine Script ta.atr() 완벽 재현 함수
+# ta.atr(length) = ta.rma(ta.tr(true), length)
+# ta.tr(true) = max(high-low, abs(high-prev_close), abs(low-prev_close))
+# ta.rma = EMA with alpha = 1/length (= RMA / SMMA)
+if 'JIT_ATR_PINE' not in globals():
     @njit
-    def order_func_nb(c, o, h, l, cl, hlp_t, llp_t, atp, ats, trm,
-                      inst_num, use_tr, o_m_h, o_m_l, e_m_h, e_m_l, tp_t, sl_t,
-                      tph, slh, tpl, sll, tpm, slm, slip_pct, dec,
-                      id_a, price_a, size_a, entry_idx_a):
+    def calc_atr_pine_nb(h, l, c, length):
+        n = len(h)
+        tr = np.full(n, np.nan)
+        for i in range(1, n):
+            hl  = h[i] - l[i]
+            hpc = abs(h[i] - c[i - 1])
+            lpc = abs(l[i] - c[i - 1])
+            tr[i] = max(hl, hpc, lpc)
+        # ta.rma: alpha = 1/length, seed with first valid value
+        atr = np.full(n, np.nan)
+        alpha = 1.0 / length
+        last = np.nan
+        for i in range(n):
+            if np.isnan(tr[i]): continue
+            if np.isnan(last):
+                last = tr[i]
+            else:
+                last = alpha * tr[i] + (1.0 - alpha) * last
+            atr[i] = last
+        return atr
+    globals()['JIT_ATR_PINE'] = True
+
+def calc_ma(s, v, l, t):
+    if t == 'SMA': return n_sma(s.values, l)
+    elif t == 'EMA': return n_ema(s.values, l)
+    elif t == 'SMMA (RMA)': return n_rma(s.values, l)
+    elif t == 'WMA': return n_wma(s.values, l)
+    elif t == 'VWMA':
+        vol = v.values if v is not None else np.ones(len(s))
+        return n_vwma(s.values, vol, l)
+    return n_sma(s.values, l)
+
+# =========[ 데이터 로드 (MTF 대응) ]=========
+if 'data_htf' in globals() and 'data_ltf' in globals():
+    df_htf = data_htf
+    df_ltf = data_ltf
+else:
+    df_htf = data
+    df_ltf = data
+
+c_np_htf = df_htf['Close'].values
+h_np_htf = df_htf['High'].values
+l_np_htf = df_htf['Low'].values
+o_np_htf = df_htf['Open'].values
+vol_htf  = df_htf['Volume'] if 'Volume' in df_htf.columns else None
+
+c_np = df_ltf['Close'].values
+h_np = df_ltf['High'].values
+l_np = df_ltf['Low'].values
+o_np = df_ltf['Open'].values
+vol  = df_ltf['Volume'] if 'Volume' in df_ltf.columns else None
+n    = len(c_np)
+# =========[ 파라미터 (Optuna / 기본값) ]=========
+if 'optuna_trial' in globals() and optuna_trial:
+    hl_price_type  = optuna_trial.suggest_categorical('hl_price', ['BB', 'H/L OTT', 'MAX'])
+    bb_ma_type     = optuna_trial.suggest_categorical('bb_ma_type', ['SMA', 'EMA', 'SMMA (RMA)', 'WMA', 'VWMA'])
+    bb_len         = optuna_trial.suggest_int('bb_length', 10, 50)
+    bb_dev_in      = optuna_trial.suggest_float('bb_dev', 1.0, 3.0, step=0.1)
+    bb_min_w       = optuna_trial.suggest_float('bb_min_width', 1.0, 5.0, step=0.1)
+    hott_ma_type   = optuna_trial.suggest_categorical('hott_ma_type', ['SMA', 'EMA', 'SMMA (RMA)', 'WMA', 'VWMA'])
+    hott_len       = optuna_trial.suggest_int('hott_length', 1, 10)
+    hott_per       = optuna_trial.suggest_float('hott_percent', 0.1, 2.0, step=0.1)
+    hott_h_len     = optuna_trial.suggest_int('hott_h_length', 50, 300)
+    hott_h_src     = optuna_trial.suggest_categorical('hott_h_src', ['High', 'close'])
+    h_int          = optuna_trial.suggest_int('high_int', 0, 1)
+    hl_tp_atr_mul  = optuna_trial.suggest_float('hl_tp_atr_mul', 1.0, 6.0, step=0.1)
+    hl_sl_atr_mul  = optuna_trial.suggest_float('hl_sl_atr_mul', 1.0, 6.0, step=0.1)
+    o_m_hl         = optuna_trial.suggest_categorical('open_at_hl', ['limits', 'close'])
+    o_m_ll         = optuna_trial.suggest_categorical('open_at_ll', ['limits', 'close'])
+    e_m_hl         = optuna_trial.suggest_categorical('exit_at_hl', ['limits', 'close'])
+    e_m_ll         = optuna_trial.suggest_categorical('exit_at_ll', ['limits', 'close'])
+    tp_hl_type     = optuna_trial.suggest_categorical('hl_tp_price', ['Fixed', 'ATR', 'both'])
+    sl_hl_type     = optuna_trial.suggest_categorical('hl_sl_price', ['Fixed', 'ATR', 'both'])
+    ma2_type       = optuna_trial.suggest_categorical('ma2_type', ['SMA', 'EMA', 'SMMA (RMA)', 'WMA', 'VWMA'])
+    ma2_len        = optuna_trial.suggest_int('ma2_len', 1, 10)
+    ma1_len        = optuna_trial.suggest_int('ma1_len', 10, 50)
+    tr_ma_type     = optuna_trial.suggest_categorical('tr_ma_type', ['SMA', 'EMA', 'SMMA (RMA)', 'WMA', 'VWMA'])
+    tr_ma_len      = optuna_trial.suggest_int('tr_ma_len', 50, 200)
+    atr_len        = optuna_trial.suggest_int('atr_length', 7, 20)
+    atr_len2       = optuna_trial.suggest_int('atr_length2', 7, 20)
+    ll_mult        = optuna_trial.suggest_float('ll_mult', 1.0, 3.0, step=0.1)
+    ll_vol_filter  = optuna_trial.suggest_categorical('ll_volatility_filter', [True, False])
+    en_ll_per      = optuna_trial.suggest_float('entry_ll_per', 0.02, 0.15, step=0.001)
+    tp_hl_per      = optuna_trial.suggest_float('tp_hl_per', 0.005, 0.05, step=0.001)
+    sl_hl_per      = optuna_trial.suggest_float('sl_hl_per', 0.01, 0.07, step=0.001)
+    tp_ll_per      = optuna_trial.suggest_float('tp_ll_per', 0.005, 0.05, step=0.001)
+    sl_ll_per      = optuna_trial.suggest_float('sl_ll_per', 0.01, 0.07, step=0.001)
+    ex_dec         = optuna_trial.suggest_int('exchange_decimal', 1, 8)
+    inst           = optuna_trial.suggest_categorical('installment', [1, 2])
+    tr_hl          = optuna_trial.suggest_categorical('tr_hl', [True, False])
+    slippage_ticks = 3
+else:
+    hl_price_type  = 'H/L OTT'
+    bb_ma_type     = 'EMA';  bb_len = 20; bb_dev_in = 2.0; bb_min_w = 3.0
+    hott_ma_type   = 'EMA';  hott_len = 2; hott_per = 0.6; hott_h_len = 100
+    hott_h_src     = 'close'; h_int = 0
+    hl_tp_atr_mul  = 2.0;  hl_sl_atr_mul = 4.0
+    o_m_hl = 'limits'; o_m_ll = 'limits'
+    e_m_hl = 'close';  e_m_ll = 'limits'
+    tp_hl_type = 'ATR'; sl_hl_type = 'ATR'
+    ma2_type = 'EMA'; ma2_len = 3; ma1_len = 20
+    tr_ma_type = 'EMA'; tr_ma_len = 100
+    atr_len = 10; atr_len2 = 10
+    ll_mult = 1.5; ll_vol_filter = False; en_ll_per = 0.06
+    tp_hl_per = 0.015; sl_hl_per = 0.02
+    tp_ll_per = 0.015; sl_ll_per = 0.015
+    ex_dec = 3; inst = 1; tr_hl = True; slippage_ticks = 3
+
+# =========[ 지표 계산 (HTF 기준) ]=========
+
+# --- Bollinger Bands ---
+bb_mid = calc_ma(df_htf['Close'], vol_htf, bb_len, bb_ma_type)
+bb_std = df_htf['Close'].rolling(bb_len).std(ddof=0).values
+bb_mid_safe = np.where(np.isnan(bb_mid), 0.0, bb_mid)
+bb_dev = np.maximum(bb_std * bb_dev_in, bb_mid_safe * bb_min_w / 100.0)
+bb_u   = bb_mid + bb_dev
+
+# --- H/L OTT ---
+h_src_ser = df_htf['High'] if hott_h_src == 'High' else df_htf['Close']
+mavg_h_pre = h_src_ser.rolling(hott_h_len).max()
+mavg_h_np  = calc_ma(mavg_h_pre, vol_htf, hott_len, hott_ma_type)
+hott_raw   = calc_hott_nb(mavg_h_np, hott_per)
+
+hott_s = np.full(len(c_np_htf), np.nan)
+if h_int > 0: hott_s[h_int:] = hott_raw[:-h_int]
+else:         hott_s = hott_raw.copy()
+
+# --- HL 트리거 가격 ---
+if hl_price_type == 'BB': hl_p = bb_u.copy()
+elif hl_price_type == 'H/L OTT': hl_p = hott_s.copy()
+else: hl_p = np.fmax(hott_s, bb_u)
+
+# --- LL 트리거 가격 ---
+safe_close = np.where(c_np_htf == 0, 0.0001, c_np_htf)
+hl_ratio   = (h_np_htf - l_np_htf) / safe_close
+ma1_arr    = n_sma(hl_ratio, ma1_len)
+
+ma2_arr    = calc_ma(df_htf['Close'], vol_htf, ma2_len, ma2_type)
+if ll_vol_filter: ll_p = ma2_arr * (1.0 - ma1_arr * ll_mult - en_ll_per)
+else:             ll_p = ma2_arr * (1.0 - en_ll_per)
+
+# --- ATR (Pine ta.atr 완전 재현: ta.rma 기반) ---
+atr_tp_arr = calc_atr_pine_nb(h_np_htf, l_np_htf, c_np_htf, atr_len)
+atr_sl_arr = calc_atr_pine_nb(h_np_htf, l_np_htf, c_np_htf, atr_len2)
+
+# --- TR MA ---
+tr_ma_arr = calc_ma(df_htf['Close'], vol_htf, tr_ma_len, tr_ma_type)
+
+# =========[ 신호 및 MTF Reindexing (HTF -> LTF) ]=========
+
+# HTF 종가 확정 기준 신호 생성 (ID 부여)
+htf_idx = np.arange(1, len(c_np_htf) + 1)
+hl_close_sig = np.where(c_np_htf > hl_p, htf_idx, 0)
+ll_close_sig = np.where(c_np_htf < ll_p, htf_idx, 0)
+
+tr_prev = pd.Series(tr_ma_arr).shift(1).values
+cl_prev = pd.Series(c_np_htf).shift(1).values
+tr_exit_sig = np.where((c_np_htf < tr_ma_arr) & (cl_prev >= tr_prev), htf_idx, 0)
+
+def align_to_ltf(arr_htf, df_h, df_l):
+    if df_h is df_l: return arr_htf
+    # HTF 마감 시점의 지표/신호는 '다음 HTF 캔들' 구간 내내 사용되어야 하므로 shift(1)
+    s = pd.Series(arr_htf, index=df_h.index).shift(1)
+    return s.reindex(df_l.index, method='ffill').values
+
+hlp_t = align_to_ltf(hl_p, df_htf, df_ltf)
+llp_t = align_to_ltf(ll_p, df_htf, df_ltf)
+atp_t = align_to_ltf(atr_tp_arr, df_htf, df_ltf)
+ats_t = align_to_ltf(atr_sl_arr, df_htf, df_ltf)
+
+hl_sig_t = align_to_ltf(hl_close_sig, df_htf, df_ltf)
+ll_sig_t = align_to_ltf(ll_close_sig, df_htf, df_ltf)
+tr_sig_t = align_to_ltf(tr_exit_sig, df_htf, df_ltf)
+htf_id_t = align_to_ltf(htf_idx, df_htf, df_ltf)
+
+# =========[ 상태 배열 ]=========
+id_arr    = np.zeros(1, dtype=np.int32)
+price_arr = np.zeros(1, dtype=np.float64)
+size_arr  = np.zeros(1, dtype=np.float64)
+# 중복 진입/청산 방지를 위한 추적 배열 (Pine 1봉 1주문)
+last_act_a = np.zeros(3, dtype=np.float64)  # 0: HL entry, 1: LL entry, 2: TR exit
+
+# =========[ 주문 함수 ]=========
+if 'JIT_ORDER_V5' not in globals():
+    @njit
+    def order_func_nb(c,
+                      o, h, l, cl,
+                      hlp_t, llp_t,
+                      hl_sig_t, ll_sig_t, tr_sig_t, htf_id_t,
+                      atp, ats,
+                      inst_num, use_tr,
+                      o_m_h, o_m_l,
+                      e_m_h, e_m_l,
+                      tp_t, sl_t,
+                      tph, slh,
+                      tpl, sll,
+                      tpm, slm,
+                      slip_ticks, dec,
+                      id_a, price_a, size_a, last_act_a):
 
         i = c.i; col = c.col
         if i < 1:
             return vbt.portfolio.nb.order_nothing_nb()
 
-        pos = c.position_now; cash = c.cash_now
-        p10 = 10.0**dec
+        pos  = c.position_now
+        cash = c.cash_now
+        p10  = 10.0 ** dec
+        tick = 1.0 / p10
+        slip = slip_ticks * tick
 
+        # ====== 진입 (포지션 없을 때) ======
         if pos == 0:
-            id_a[col] = 0; price_a[col] = 0.0; size_a[col] = 0.0; entry_idx_a[col] = -1
-            hlp, llp = hlp_t[i-1], llp_t[i-1]
-            if not np.isnan(hlp) and hlp > 0:
-                if (h[i] > hlp if o_m_h == 0 else cl[i] > hlp):
-                    raw_ep = (max(o[i], hlp) if o_m_h == 0 else cl[i])
-                    ep = np.floor(raw_ep * (1.0 + slip_pct) * p10 + 0.5) / p10  # 🚀 [V8.2] % 슬리피지
-                    qty = np.floor((cash * 0.991 / ep) * p10 + 0.5) / p10
-                    if qty > 0:
-                        id_a[col] = 1; price_a[col] = ep; size_a[col] = qty; entry_idx_a[col] = i
-                        return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=0)
-            if not np.isnan(llp) and llp > 0:
-                if (l[i] < llp if o_m_l == 0 else cl[i] < llp):
-                    raw_ep = (min(o[i], llp) if o_m_l == 0 else cl[i])
-                    ep = np.floor(raw_ep * (1.0 + slip_pct) * p10 + 0.5) / p10  # 🚀 [V8.2] % 슬리피지
-                    qty = np.floor((cash * 0.991 / ep) * p10 + 0.5) / p10
-                    if qty > 0:
-                        id_a[col] = 2; price_a[col] = ep; size_a[col] = qty; entry_idx_a[col] = i
-                        return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=0)
+            id_a[col] = 0; price_a[col] = 0.0; size_a[col] = 0.0
 
+            hlp_cur = hlp_t[i]  # Reindexed HTF Plot (already shifted)
+            llp_cur = llp_t[i]
+            cur_htf = htf_id_t[i]
+
+            # HL 진입
+            if not np.isnan(hlp_cur) and hlp_cur > 0:
+                if o_m_h == 0:  # limits (stop order)
+                    if h[i] >= hlp_cur and cur_htf != last_act_a[0]:
+                        ep = max(o[i], hlp_cur) + slip
+                        qty = np.floor((cash * 0.9992 / ep) * p10 + 0.5) / p10
+                        if qty > 0:
+                            id_a[col] = 1; price_a[col] = ep; size_a[col] = qty
+                            last_act_a[0] = cur_htf
+                            return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=0)
+                else:  # close 모드 (HTF 종가 시그널)
+                    if hl_sig_t[i] > 0 and hl_sig_t[i] != last_act_a[0]:
+                        ep = o[i] + slip
+                        qty = np.floor((cash * 0.9992 / ep) * p10 + 0.5) / p10
+                        if qty > 0:
+                            id_a[col] = 1; price_a[col] = ep; size_a[col] = qty
+                            last_act_a[0] = hl_sig_t[i]
+                            return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=0)
+
+            # LL 진입
+            if not np.isnan(llp_cur) and llp_cur > 0:
+                if o_m_l == 0:  # limits
+                    if l[i] <= llp_cur and cur_htf != last_act_a[1]:
+                        ep = min(o[i], llp_cur) - slip
+                        if ep <= 0: ep = tick
+                        qty = np.floor((cash * 0.9992 / ep) * p10 + 0.5) / p10
+                        if qty > 0:
+                            id_a[col] = 2; price_a[col] = ep; size_a[col] = qty
+                            last_act_a[1] = cur_htf
+                            return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=0)
+                else:  # close
+                    if ll_sig_t[i] > 0 and ll_sig_t[i] != last_act_a[1]:
+                        ep = o[i] - slip
+                        if ep <= 0: ep = tick
+                        qty = np.floor((cash * 0.9992 / ep) * p10 + 0.5) / p10
+                        if qty > 0:
+                            id_a[col] = 2; price_a[col] = ep; size_a[col] = qty
+                            last_act_a[1] = ll_sig_t[i]
+                            return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=0)
+
+        # ====== 청산 (포지션 있을 때) ======
         if pos > 0:
-            # 🚀 [V8.2] 동일 봉 진입-청산 원천 차단 (Same-bar exit prevention)
-            if i == entry_idx_a[col]:
-                return vbt.portfolio.nb.order_nothing_nb()
-
             cur_state = id_a[col]
             ep = price_a[col]
 
-            if use_tr and cur_state == 1 and not np.isnan(trm[i]) and cl[i] < trm[i] and cl[i-1] >= trm[i-1]:
-                exit_p = np.floor(cl[i] * (1.0 - slip_pct) * p10 + 0.5) / p10  # 🚀 [V8.2] % 슬리피지
+            # --- TR MA 크로스언더 청산 ---
+            if use_tr and cur_state == 1:
+                if tr_sig_t[i] > 0 and tr_sig_t[i] != last_act_a[2]:
+                    exit_p = o[i] - slip
+                    last_act_a[2] = tr_sig_t[i]
+                    return vbt.portfolio.nb.order_nb(size=-pos, price=exit_p, size_type=0)
+
+            # --- TP / SL 계산 ---
+            if cur_state == 1:  # HL 포지션
+                # TP
+                tf = ep * (1.0 + tph)
+                ta_v = ep + tpm * atp[i]
+                if tp_t == 0:   tpp = tf
+                elif tp_t == 1: tpp = ta_v
+                else:           tpp = max(tf, ta_v)  # both = max (Pine: math.max)
+
+                # SL: Pine 'both' = math.max(Fixed_SL, ATR_SL) → 더 높은(보수적) 손절
+                sf = ep * (1.0 - slh)
+                sa = ep - slm * ats[i]
+                if sl_t == 0:   slp = sf
+                elif sl_t == 1: slp = sa
+                else:           slp = max(sf, sa)  # both = max (더 높은 손절선 = 더 빠른 청산)
+
+                exit_mode = e_m_h
+
+            else:  # LL 포지션
+                tpp = ep * (1.0 + tpl)
+                slp = ep * (1.0 - sll)
+                exit_mode = e_m_l
+
+            if np.isnan(tpp) or np.isnan(slp):
+                return vbt.portfolio.nb.order_nothing_nb()
+
+            # --- 청산 조건 체크 ---
+            if exit_mode == 0:  # limits 모드: 고가/저가로 체크
+                is_hit = (h[i] >= tpp) or (l[i] <= slp)
+            else:               # close 모드: 종가로 체크 (barstate.isconfirmed)
+                is_hit = (cl[i] >= tpp) or (cl[i] <= slp)
+
+            if is_hit:
+                if exit_mode == 0:  # limits
+                    # 동일 봉 TP/SL 동시 도달 → 시가와의 거리가 가까운 쪽 우선
+                    tp_hit = h[i] >= tpp
+                    sl_hit = l[i] <= slp
+                    if tp_hit and sl_hit:
+                        is_tp = abs(o[i] - tpp) < abs(o[i] - slp)
+                    else:
+                        is_tp = tp_hit
+                    exit_p = tpp if is_tp else slp
+                    # gap 처리: 시가가 이미 TP/SL을 넘어선 경우
+                    if o[i] >= tpp:
+                        exit_p = o[i]; is_tp = True
+                    elif o[i] <= slp:
+                        exit_p = o[i]; is_tp = False
+                    if not is_tp:
+                        exit_p -= slip
+                else:  # close
+                    is_tp = cl[i] >= tpp
+                    exit_p = cl[i] - slip
+
+                # installment 분할청산 (HL만 적용, Pine: Installment=2이면 절반씩)
+                if cur_state == 1 and inst_num == 2:
+                    half = np.ceil((size_a[col] / 2.0) * p10) / p10
+                    if pos > half:
+                        return vbt.portfolio.nb.order_nb(size=-half, price=exit_p, size_type=0)
+
                 return vbt.portfolio.nb.order_nb(size=-pos, price=exit_p, size_type=0)
 
-            if cur_state == 1:
-                tf, ta = ep*(1+tph), ep + tpm*atp[i]
-                tpp = tf if tp_t==0 else (ta if tp_t==1 else max(tf, ta))
-                sf, sa = ep*(1-slh), ep - slm*ats[i]
-                slp = sf if sl_t==0 else (sa if sl_t==1 else max(sf, sa))
-                exit_mode = e_m_h
-            else:
-                tpp, slp = ep*(1+tpl), ep*(1-sll); exit_mode = e_m_l
-
-            if np.isnan(tpp) or np.isnan(slp): return vbt.portfolio.nb.order_nothing_nb()
-            is_hit = (h[i] >= tpp or l[i] <= slp) if exit_mode == 0 else (cl[i] >= tpp or cl[i] <= slp)
-            if is_hit:
-                is_tp = False
-                if exit_mode == 0:
-                    if h[i] >= tpp and l[i] <= slp:
-                        is_tp = False  # 🚀 [V8.1] SL 우선 (bar_magnifier 보수적 특성)
-                    else:
-                        is_tp = (h[i] >= tpp)
-                    exit_p = tpp if is_tp else slp
-                    if (o[i] >= tpp or o[i] <= slp):
-                        exit_p = o[i]; is_tp = (o[i] >= tpp)
-                else:
-                    is_tp = (cl[i] >= tpp); exit_p = cl[i]
-
-                # 🚀 [V8.2] 모든 청산에 % 슬리피지 적용 (수익을 항상 깎아냄)
-                exit_p = np.floor(exit_p * (1.0 - slip_pct) * p10 + 0.5) / p10
-
-                if inst_num == 2 and pos > (np.ceil((size_a[col] * 0.6) * p10) / p10):
-                    return vbt.portfolio.nb.order_nb(size=-(np.ceil((pos/2) * p10) / p10), price=exit_p, size_type=0)
-                else:
-                    return vbt.portfolio.nb.order_nb(size=-pos, price=exit_p, size_type=0)
         return vbt.portfolio.nb.order_nothing_nb()
-    globals()['JIT_COMPILED_ORDER_V82'] = True
 
-# 시뮬레이션
+    globals()['JIT_ORDER_V5'] = True
+
+# =========[ 시뮬레이션 실행 ]=========
 m_map = {'limits': 0, 'close': 1}
 t_map = {'Fixed': 0, 'ATR': 1, 'both': 2}
-o_h_m, o_l_m = m_map.get(o_m_hl, 0), m_map.get(o_m_ll, 0)
-e_h_m, e_l_m = m_map.get(e_m_hl, 0), m_map.get(e_m_ll, 0)
-tp_h_t, sl_h_t = t_map.get(tp_hl_type, 0), t_map.get(sl_hl_type, 0)
+
+o_h_m  = m_map.get(o_m_hl, 0)
+o_l_m  = m_map.get(o_m_ll, 0)
+e_h_m  = m_map.get(e_m_hl, 0)
+e_l_m  = m_map.get(e_m_ll, 0)
+t_m    = t_map.get(tp_hl_type, 1)
 
 vbt.settings.portfolio['fees'] = 0.0008
+
 portfolio = vbt.Portfolio.from_order_func(
-    data['Close'], order_func_nb,
-    o_np, h_np, l_np, c_np, hl_p_triggers, ll_p_triggers, atr_tp, atr_sl, tr_ma,
-    inst, tr_hl, o_h_m, o_l_m, e_h_m, e_l_m, tp_h_t, sl_h_t,
-    tp_hl_per, sl_hl_per, tp_ll_per, sl_ll_per, hl_tp_atr_mul, hl_sl_atr_mul, slip_pct, ex_dec,
-    id_arr, price_arr, size_arr, entry_idx_arr,
-    flexible=False, init_cash=500000, cash_sharing=False
+    c_np,
+    order_func_nb,
+    o_np, h_np, l_np, c_np,
+    hlp_t, llp_t,
+    hl_sig_t, ll_sig_t, tr_sig_t, htf_id_t,
+    atp_t, ats_t,
+    inst, tr_hl,
+    o_h_m, o_l_m,
+    e_h_m, e_l_m,
+    t_m, t_m,
+    tp_hl_per, sl_hl_per,
+    tp_ll_per, sl_ll_per,
+    hl_tp_atr_mul, hl_sl_atr_mul,
+    slippage_ticks, ex_dec,
+    id_arr, price_arr, size_arr, last_act_a,
+    init_cash=400.0,
+    fees=0.0008,
+    freq='1m'
 )
 
+# =========[ 결과 집계 ]=========
 stats = portfolio.stats()
 metrics = {
     "Total Return (%)": round(np.nan_to_num(float(portfolio.total_return() * 100.0)), 2),
-    "Win Rate (%)": round(np.nan_to_num(float(stats.get('Win Rate [%]', 0.0))), 2),
-    "MDD (%)": round(np.nan_to_num(float(portfolio.max_drawdown() * 100.0)), 2),
-    "Total Trades": int(portfolio.trades.count()),
-    "Total Profit": round(np.nan_to_num(float(portfolio.total_profit())), 2),
-    "Total Fees": round(np.nan_to_num(float(stats.get('Total Fees [$]', stats.get('Total Fees', 0.0)))), 2)
+    "Win Rate (%)":     round(np.nan_to_num(float(stats.get('Win Rate [%]', 0.0))), 2),
+    "MDD (%)":          round(np.nan_to_num(float(portfolio.max_drawdown() * 100.0)), 2),
+    "Total Trades":     int(portfolio.trades.count()),
+    "Total Profit":     round(np.nan_to_num(float(portfolio.total_profit())), 2),
+    "Total Fees":       round(np.nan_to_num(float(stats.get('Total Fees [$]', stats.get('Total Fees', 0.0)))), 2),
 }
 print(metrics)

@@ -65,7 +65,7 @@ class ProgressCallback:
                     send_discord_progress(self.study_name, self.symbol, th, best_val)
 
 @celery_app.task(bind=True)
-def run_optuna_worker(self, study_name: str, data_path: str, engine: str, code_str: str, n_trials: int, symbol: str, total_trials: int, target_tf: str = "2h"):
+def run_optuna_worker(self, study_name: str, data_path: str, engine: str, code_str: str, n_trials: int, symbol: str, total_trials: int):
     worker_id = self.request.id
     error_notified = False
     
@@ -84,7 +84,7 @@ def run_optuna_worker(self, study_name: str, data_path: str, engine: str, code_s
                 return 0.0
             
             try:
-                success, res = run_backtest(engine, code_str, data, optuna_trial=trial, target_tf=target_tf)
+                success, res = run_backtest(engine, code_str, data, optuna_trial=trial)
                 
                 if success and isinstance(res, dict):
                     # 성공 시 지표 저장 (🚀 [방어] 거대 객체 직렬화로 인한 커밋 에러 원천 차단)
@@ -163,19 +163,7 @@ def finalize_optuna_study(self, worker_results, study_name: str, data_path: str,
         excel_output = create_excel_report(study, data)
         
         os.makedirs("results", exist_ok=True)
-        
-        # 🚀 [V7.5] 파일명에 엔진/심볼/주기/생성일자/순번 포함
-        import datetime as dt
-        today_str = dt.datetime.now().strftime("%Y-%m-%d")
-        safe_symbol = symbol.replace("/", "-")  # 파일명에 슬래시 사용 불가 대응
-        tf_str = ""
-        iter_num = 1
-        if active_task_dict:
-            tf_str = active_task_dict.get("params", {}).get("tf", "")
-            iter_num = active_task_dict.get("current_iter", 1)
-        
-        file_name = f"{engine} {safe_symbol} {tf_str} {today_str}({iter_num}).xlsx"
-        file_path = os.path.join("results", file_name)
+        file_path = f"results/Report_{study_name}.xlsx"
         with open(file_path, "wb") as f:
             f.write(excel_output.read())
             
@@ -185,15 +173,6 @@ def finalize_optuna_study(self, worker_results, study_name: str, data_path: str,
         except ValueError:
             # 시도가 하나도 없거나 모두 실패한 경우
             best_value = 0.0
-        
-        # 🚀 [V8.0] 구글 시트 자동 전송 (실패해도 엑셀 결과에 영향 없음)
-        try:
-            from utils.sheets import push_to_google_sheets
-            from utils.exporter import create_report_dataframe
-            report_df = create_report_dataframe(study)
-            push_to_google_sheets(report_df, engine, symbol, tf_str)
-        except Exception as gs_err:
-            print(f"[Google Sheets] 전송 스킵: {str(gs_err)}")
             
         send_discord_alert(study_name, best_value, engine, symbol)
             
@@ -215,7 +194,7 @@ def finalize_optuna_study(self, worker_results, study_name: str, data_path: str,
                 w_cnt = params.get("workers", 4)
                 for _ in range(w_cnt):
                     w_id = uuid()
-                    sig = run_optuna_worker.s(next_sn, params["dp"], params["eng"], params["code"], params["trials"]//w_cnt, params["sym"], params["trials"], params["tf"])
+                    sig = run_optuna_worker.s(next_sn, params["dp"], params["eng"], params["code"], params["trials"]//w_cnt, params["sym"], params["trials"])
                     sig.set(task_id=w_id)
                     worker_sigs.append(sig)
                     worker_ids.append(w_id)

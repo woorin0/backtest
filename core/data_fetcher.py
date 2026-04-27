@@ -45,11 +45,9 @@ def fetch_candles(exchange_id: str, symbol: str, timeframe: str, start_date, end
         exchange_class = getattr(ccxt, exchange_id.lower())
         exchange = exchange_class({'timeout': 10000, 'enableRateLimit': True})
         
-        # 🚨 [V9.0] 1분봉 정밀 시뮬레이션 대응: 
-        # 원본 주기(timeframe)와 상관없이 '2시간봉 지표 계산을 위한 충분한 과거 데이터'를 확보하기 위해
-        # 약 500개 분량의 2시간봉(1000시간)을 패딩으로 확보 (1분봉 기준 60,000개)
+        # 🚨 [V4.3] 데이터 패딩 적용: 사용자가 선택한 시작일보다 과거로 거슬러 올라감
         tf_ms = get_timeframe_ms(timeframe)
-        padding_ms = max(padding_candles * tf_ms, 1000 * 60 * 60 * 1000) # 최소 1000시간 확보
+        padding_ms = padding_candles * tf_ms
         base_since = int(pd.to_datetime(start_date).timestamp() * 1000)
         since = base_since - padding_ms
         
