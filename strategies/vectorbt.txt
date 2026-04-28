@@ -338,7 +338,7 @@ if 'JIT_ORDER_V5' not in globals():
                         if qty > 0:
                             id_a[col] = 1; price_a[col] = ep; size_a[col] = qty
                             last_act_a[0] = cur_htf
-                            return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=0)
+                            return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=0, fees=0.0008)
                 else:  # close 모드 (HTF 종가 시그널)
                     if hl_sig_t[i] > 0 and hl_sig_t[i] != last_act_a[0]:
                         ep = o[i] + slip
@@ -346,7 +346,7 @@ if 'JIT_ORDER_V5' not in globals():
                         if qty > 0:
                             id_a[col] = 1; price_a[col] = ep; size_a[col] = qty
                             last_act_a[0] = hl_sig_t[i]
-                            return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=0)
+                            return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=0, fees=0.0008)
 
             # LL 진입
             if not np.isnan(llp_cur) and llp_cur > 0:
@@ -358,7 +358,7 @@ if 'JIT_ORDER_V5' not in globals():
                         if qty > 0:
                             id_a[col] = 2; price_a[col] = ep; size_a[col] = qty
                             last_act_a[1] = cur_htf
-                            return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=0)
+                            return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=0, fees=0.0008)
                 else:  # close
                     if ll_sig_t[i] > 0 and ll_sig_t[i] != last_act_a[1]:
                         ep = o[i] - slip
@@ -367,7 +367,7 @@ if 'JIT_ORDER_V5' not in globals():
                         if qty > 0:
                             id_a[col] = 2; price_a[col] = ep; size_a[col] = qty
                             last_act_a[1] = ll_sig_t[i]
-                            return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=0)
+                            return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=0, fees=0.0008)
 
         # ====== 청산 (포지션 있을 때) ======
         if pos > 0:
@@ -379,7 +379,7 @@ if 'JIT_ORDER_V5' not in globals():
                 if tr_sig_t[i] > 0 and tr_sig_t[i] != last_act_a[2]:
                     exit_p = o[i] - slip
                     last_act_a[2] = tr_sig_t[i]
-                    return vbt.portfolio.nb.order_nb(size=-pos, price=exit_p, size_type=0)
+                    return vbt.portfolio.nb.order_nb(size=-pos, price=exit_p, size_type=0, fees=0.0008)
 
             # --- TP / SL 계산 ---
             if cur_state == 1:  # HL 포지션
@@ -438,9 +438,9 @@ if 'JIT_ORDER_V5' not in globals():
                 if cur_state == 1 and inst_num == 2:
                     half = np.ceil((size_a[col] / 2.0) * p10) / p10
                     if pos > half:
-                        return vbt.portfolio.nb.order_nb(size=-half, price=exit_p, size_type=0)
+                        return vbt.portfolio.nb.order_nb(size=-half, price=exit_p, size_type=0, fees=0.0008)
 
-                return vbt.portfolio.nb.order_nb(size=-pos, price=exit_p, size_type=0)
+                return vbt.portfolio.nb.order_nb(size=-pos, price=exit_p, size_type=0, fees=0.0008)
 
         return vbt.portfolio.nb.order_nothing_nb()
 
@@ -475,7 +475,6 @@ portfolio = vbt.Portfolio.from_order_func(
     slippage_ticks, ex_dec,
     id_arr, price_arr, size_arr, last_act_a,
     init_cash=400.0,
-    fees=0.0008,  # Pine: commission_value=0.08% 직접 주입
     freq='1m'
 )
 
