@@ -196,7 +196,7 @@ if 'optuna_trial' in globals() and optuna_trial:
     sl_hl_per      = optuna_trial.suggest_float('sl_hl_per', 0.01, 0.07, step=0.001)
     tp_ll_per      = optuna_trial.suggest_float('tp_ll_per', 0.005, 0.05, step=0.001)
     sl_ll_per      = optuna_trial.suggest_float('sl_ll_per', 0.01, 0.07, step=0.001)
-    ex_dec         = optuna_trial.suggest_int('exchange_decimal', 1, 8)
+    ex_dec         = optuna_trial.suggest_int('exchange_decimal', 1, 3)
     inst           = optuna_trial.suggest_categorical('installment', [1, 2])
     tr_hl          = optuna_trial.suggest_categorical('tr_hl', [True, False])
     slippage_ticks = 3
@@ -284,12 +284,14 @@ ll_sig_t = align_to_ltf(ll_close_sig, df_htf, df_ltf)
 tr_sig_t = align_to_ltf(tr_exit_sig, df_htf, df_ltf)
 htf_id_t = align_to_ltf(htf_idx, df_htf, df_ltf)
 
-# =========[ 상태 배열 ]=========
+# =========[ 상태 배열 (매 Trial마다 반드시 새로 초기화) ]=========
+# [BUG FIX] globals() 캐싱으로 인한 이전 Trial 상태 오염 방지
 id_arr    = np.zeros(1, dtype=np.int32)
 price_arr = np.zeros(1, dtype=np.float64)
 size_arr  = np.zeros(1, dtype=np.float64)
-# 중복 진입/청산 방지를 위한 추적 배열 (Pine 1봉 1주문)
 last_act_a = np.zeros(3, dtype=np.float64)  # 0: HL entry, 1: LL entry, 2: TR exit
+# 캐시에서 이전 값이 남아있을 경우를 대비해 명시적으로 0으로 덮어쓰기
+id_arr[:] = 0; price_arr[:] = 0.0; size_arr[:] = 0.0; last_act_a[:] = 0.0
 
 # =========[ 주문 함수 ]=========
 if 'JIT_ORDER_V5' not in globals():
@@ -454,8 +456,8 @@ e_h_m  = m_map.get(e_m_hl, 0)
 e_l_m  = m_map.get(e_m_ll, 0)
 t_m    = t_map.get(tp_hl_type, 1)
 
-vbt.settings.portfolio['fees'] = 0.0008
-
+# [BUG FIX] 수수료를 글로벌 설정이 아닌 from_order_func에 직접 주입
+# vbt.settings.portfolio['fees']는 from_order_func에 자동 적용되지 않음
 portfolio = vbt.Portfolio.from_order_func(
     c_np,
     order_func_nb,
@@ -473,6 +475,7 @@ portfolio = vbt.Portfolio.from_order_func(
     slippage_ticks, ex_dec,
     id_arr, price_arr, size_arr, last_act_a,
     init_cash=400.0,
+    fees=0.0008,  # Pine: commission_value=0.08% 직접 주입
     freq='1m'
 )
 
