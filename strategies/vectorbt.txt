@@ -473,7 +473,6 @@ portfolio = vbt.Portfolio.from_order_func(
     slippage_ticks, ex_dec,
     id_arr, price_arr, size_arr, last_act_a,
     init_cash=400.0,
-    fees=0.0008,
     freq='1m'
 )
 
