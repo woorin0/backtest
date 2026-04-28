@@ -37,8 +37,20 @@ celery_app.conf.update(
 )
 
 def get_study(study_name):
-    # 🚀 [V7.3] JournalRedisStorage 완전 제거, 메모리 한계 없는 로컬 SQLite RDBMS 도입
-    storage = "sqlite:///optuna_results.db"
+    import time
+    # 🚀 [V19] SQLite Alembic 동시 초기화 충돌(IntegrityError) 및 Lock 완벽 방어
+    storage = optuna.storages.RDBStorage(
+        url="sqlite:///optuna_results.db",
+        engine_kwargs={"connect_args": {"timeout": 60}}
+    )
+    for _ in range(10):
+        try:
+            return optuna.create_study(study_name=study_name, storage=storage, direction="maximize", load_if_exists=True)
+        except Exception as e:
+            if "alembic_version" in str(e) or "locked" in str(e).lower() or "UNIQUE constraint" in str(e):
+                time.sleep(1) # 다른 워커가 DB 초기화를 마칠 때까지 대기
+            else:
+                raise
     return optuna.create_study(study_name=study_name, storage=storage, direction="maximize", load_if_exists=True)
 
 class ProgressCallback:
@@ -95,6 +107,9 @@ def prepare_mtf_data_task(self, study_name: str, exchange: str, symbol: str, htf
         
         # 4. 최적화 작업(Chord) 트리거
         rp.progress(100, "최적화 작업을 큐에 등록 중...")
+        
+        # 🚀 [V19] 큐(병렬 처리) 등록 전, 단일 스레드 상태안에서 SQLite Alembic Schema를 최초 1회 사전 생성하여 충돌 완전 봉쇄
+        get_study(study_name)
         
         worker_sigs = []
         worker_ids = []
@@ -265,7 +280,7 @@ def finalize_optuna_study(self, worker_results, study_name: str, data_path: str,
                 import optuna
                 
                 next_sn = f"study_{int(time.time())}"
-                optuna.create_study(study_name=next_sn, storage="sqlite:///optuna_results.db", direction="maximize", load_if_exists=True)
+                get_study(next_sn)
                 
                 worker_sigs = []
                 worker_ids = []
