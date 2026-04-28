@@ -268,7 +268,11 @@ def finalize_optuna_study(self, worker_results, study_name: str, data_path: str,
             best_value = 0.0
             
         send_discord_alert(study_name, best_value, engine, symbol)
-            
+        
+    except Exception as inner_e:
+        send_discord_error(f"최종 집계 통계 생성 에러 (루프는 계속 진행): {str(inner_e)}", pair=symbol, engine=engine)
+        
+    try:
         # 🚨 [새로운 백엔드 자율 연속 실행 루프]
         # 브라우저 절전 모드로 인한 지연을 차단하기 위해, Celery 백엔드가 스스로 다음 회차를 발사합니다.
         if active_task_dict:
