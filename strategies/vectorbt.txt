@@ -486,6 +486,6 @@ metrics = {
     "MDD (%)":          round(np.nan_to_num(float(portfolio.max_drawdown() * 100.0)), 2),
     "Total Trades":     int(portfolio.trades.count()),
     "Total Profit":     round(np.nan_to_num(float(portfolio.total_profit())), 2),
-    "Total Fees":       round(np.nan_to_num(float(stats.get('Total Fees Paid', stats.get('Total Fees [$]', 0.0)))), 2),
+    "Total Fees":       round(np.nan_to_num(float(portfolio.orders.fee.sum())), 2),
 }
 print(metrics)
