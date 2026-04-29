@@ -150,7 +150,14 @@ for i, fp in enumerate(res_files[:10]):
         with open(fp, "rb") as f:
             cols[1].download_button("📥 다운로드", f, fn, key=f"dl_{i}")
 
-if btn_start and not active_task:
+if btn_start:
+    # 🚀 [V19.2] 완료 상태에서 곧바로 최적화 가동 버튼을 누르면 찌꺼기 캐시를 파괴하고 즉시 시작
+    if os.path.exists(CACHE_FILE):
+        os.remove(CACHE_FILE)
+    if "final_result" in st.session_state:
+        del st.session_state["final_result"]
+    active_task = None
+    
     sn = f"study_{int(time.time())}"
     
     # 🚀 [V9.0] 데이터 수집 및 최적화를 백그라운드 태스크 하나로 묶어 발사

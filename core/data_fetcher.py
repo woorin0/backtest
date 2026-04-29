@@ -66,6 +66,9 @@ def fetch_candles(exchange_id: str, symbol: str, timeframe: str, start_date, end
         
         end_timestamp = int(pd.to_datetime(end_date).timestamp() * 1000) + (24 * 60 * 60 * 1000) - 1
         
+        # 🚀 [V19] 정확한 다운로드 진행률 표기를 위해 전체 예상 캔들 수 계산
+        total_expected = max((end_timestamp - since) / tf_ms, 1)
+        
         all_ohlcv = []
         if progress_bar:
             progress_bar.progress(20, text=f"{exchange_id}에서 {symbol} 캔들 데이터 수집 시작 (Warm-up 포함)...")
@@ -89,7 +92,9 @@ def fetch_candles(exchange_id: str, symbol: str, timeframe: str, start_date, end
             time.sleep(max(exchange.rateLimit / 1000, 0.1) if hasattr(exchange, 'rateLimit') else 0.5)
             
             if progress_bar:
-                progress_bar.progress(min(int(len(all_ohlcv)/5000*100), 99), text=f"{len(all_ohlcv)}개 데이터 수집 중...")
+                # 🚀 [V19] 예상 다운로드 개수 대비 실제 다운로드 개수로 % 동적 계산
+                pct = min(int(len(all_ohlcv) / total_expected * 100), 99)
+                progress_bar.progress(pct, text=f"{len(all_ohlcv):,}/{int(total_expected):,} 캔들 수집 중...")
 
         if not all_ohlcv: return None
             
