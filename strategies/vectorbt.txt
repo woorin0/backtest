@@ -149,17 +149,21 @@ else:
     df_htf = data
     df_ltf = data
 
+# [V23] 수수료 설정을 글로벌하게 적용하여 결과 집계(Total Fees)에 반영
+vbt.settings.portfolio['fees'] = 0.0008
+
 c_np_htf = df_htf['Close'].values
 h_np_htf = df_htf['High'].values
 l_np_htf = df_htf['Low'].values
 o_np_htf = df_htf['Open'].values
-vol_htf  = df_htf['Volume'] if 'Volume' in df_htf.columns else None
+# 거래량 데이터 대소문자 모두 대응
+vol_htf  = df_htf['Volume'] if 'Volume' in df_htf.columns else (df_htf['volume'] if 'volume' in df_htf.columns else None)
 
 c_np = df_ltf['Close'].values
 h_np = df_ltf['High'].values
 l_np = df_ltf['Low'].values
 o_np = df_ltf['Open'].values
-vol  = df_ltf['Volume'] if 'Volume' in df_ltf.columns else None
+vol  = df_ltf['Volume'] if 'Volume' in df_ltf.columns else (df_ltf['volume'] if 'volume' in df_ltf.columns else None)
 n    = len(c_np)
 # =========[ 파라미터 (Optuna / 기본값) ]=========
 if 'optuna_trial' in globals() and optuna_trial:
@@ -196,24 +200,17 @@ if 'optuna_trial' in globals() and optuna_trial:
     sl_hl_per      = optuna_trial.suggest_float('sl_hl_per', 0.01, 0.07, step=0.001)
     tp_ll_per      = optuna_trial.suggest_float('tp_ll_per', 0.005, 0.05, step=0.001)
     sl_ll_per      = optuna_trial.suggest_float('sl_ll_per', 0.01, 0.07, step=0.001)
-    # [수량 과장 버그 수정] 트레이딩뷰와 완벽히 동일한 환경을 위해 3으로 강제 고정
     ex_dec         = 3
     inst           = optuna_trial.suggest_categorical('installment', [1, 2])
     tr_hl          = optuna_trial.suggest_categorical('tr_hl', [True, False])
     slippage_ticks = 3
 else:
-    hl_price_type  = 'H/L OTT'
-    bb_ma_type     = 'EMA';  bb_len = 20; bb_dev_in = 2.0; bb_min_w = 3.0
-    hott_ma_type   = 'EMA';  hott_len = 2; hott_per = 0.6; hott_h_len = 100
+    hl_price_type  = 'MAX'
+    bb_ma_type     = 'EMA';  bb_len = 49; bb_dev_in = 1.4; bb_min_w = 1.9
+    hott_ma_type   = 'WMA';  hott_len = 1; hott_per = 1.9; hott_h_len = 92
     hott_h_src     = 'close'; h_int = 0
-    hl_tp_atr_mul  = 2.0;  hl_sl_atr_mul = 4.0
+    hl_tp_atr_mul  = 2.9;  hl_sl_atr_mul = 2.2
     o_m_hl = 'limits'; o_m_ll = 'limits'
-    e_m_hl = 'close';  e_m_ll = 'limits'
-    tp_hl_type = 'ATR'; sl_hl_type = 'ATR'
-    ma2_type = 'EMA'; ma2_len = 3; ma1_len = 20
-    tr_ma_type = 'EMA'; tr_ma_len = 100
-    atr_len = 10; atr_len2 = 10
-    ll_mult = 1.5; ll_vol_filter = False; en_ll_per = 0.06
     tp_hl_per = 0.015; sl_hl_per = 0.02
     tp_ll_per = 0.015; sl_ll_per = 0.015
     ex_dec = 3; inst = 1; tr_hl = True; slippage_ticks = 3
@@ -339,6 +336,7 @@ if 'JIT_ORDER_V5' not in globals():
                         if qty > 0:
                             id_a[col] = 1; price_a[col] = ep; size_a[col] = qty
                             last_act_a[0] = cur_htf
+                            last_act_a[2] = 0.0  # [RESET] 신규 진입 시 TR 청산 상태 초기화
                             return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=0, fees=0.0008)
                 else:  # close 모드 (HTF 종가 시그널)
                     if hl_sig_t[i] > 0 and hl_sig_t[i] != last_act_a[0]:
@@ -359,6 +357,7 @@ if 'JIT_ORDER_V5' not in globals():
                         if qty > 0:
                             id_a[col] = 2; price_a[col] = ep; size_a[col] = qty
                             last_act_a[1] = cur_htf
+                            last_act_a[2] = 0.0  # [RESET] 신규 진입 시 TR 청산 상태 초기화
                             return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=0, fees=0.0008)
                 else:  # close
                     if ll_sig_t[i] > 0 and ll_sig_t[i] != last_act_a[1]:
@@ -488,6 +487,6 @@ metrics = {
     "MDD (%)":          round(np.nan_to_num(float(portfolio.max_drawdown() * 100.0)), 2),
     "Total Trades":     int(portfolio.trades.count()),
     "Total Profit":     round(np.nan_to_num(float(portfolio.total_profit())), 2),
-    "Total Fees":       round(np.nan_to_num(float(portfolio.orders.records['fees'].sum())), 2),
+    "Total Fees":       round(np.nan_to_num(float(portfolio.total_fees())), 2),
 }
 print(metrics)
