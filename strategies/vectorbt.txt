@@ -23,21 +23,41 @@ if 'JIT_COMPILED_V5' not in globals():
     @njit
     def n_ema(s, l):
         res = np.full(len(s), np.nan)
-        alpha = 2.0 / (l + 1.0); last_val = np.nan
+        alpha = 2.0 / (l + 1.0)
+        sum_val = 0.0
+        count = 0
+        last_val = np.nan
         for i in range(len(s)):
             if np.isnan(s[i]): continue
-            if np.isnan(last_val): res[i] = s[i]; last_val = s[i]
-            else: res[i] = alpha * s[i] + (1.0 - alpha) * last_val; last_val = res[i]
+            if np.isnan(last_val):
+                sum_val += s[i]
+                count += 1
+                if count == l:
+                    last_val = sum_val / l
+                    res[i] = last_val
+            else:
+                res[i] = alpha * s[i] + (1.0 - alpha) * last_val
+                last_val = res[i]
         return res
 
     @njit
     def n_rma(s, l):
         res = np.full(len(s), np.nan)
-        alpha = 1.0 / l; last_val = np.nan
+        alpha = 1.0 / l
+        sum_val = 0.0
+        count = 0
+        last_val = np.nan
         for i in range(len(s)):
             if np.isnan(s[i]): continue
-            if np.isnan(last_val): res[i] = s[i]; last_val = s[i]
-            else: res[i] = alpha * s[i] + (1.0 - alpha) * last_val; last_val = res[i]
+            if np.isnan(last_val):
+                sum_val += s[i]
+                count += 1
+                if count == l:
+                    last_val = sum_val / l
+                    res[i] = last_val
+            else:
+                res[i] = alpha * s[i] + (1.0 - alpha) * last_val
+                last_val = res[i]
         return res
 
     @njit
@@ -83,20 +103,23 @@ if 'JIT_COMPILED_V5' not in globals():
             ls = ma - fk; ss = ma + fk
             if first:
                 lsp = ls; ssp = ss; first = False; continue
+            lsp_prev = lsp
+            ssp_prev = ssp
+
             # Pine: longStop := MAvg > longStopPrev ? max(longStop, longStopPrev) : longStop
             # 'else longStop' = base longStop = current MAvg - fark = ls
-            if ma > lsp:
-                lsp = max(ls, lsp)   # 상승 추세: 라인을 올림 (내려오지 않음)
+            if ma > lsp_prev:
+                lsp = max(ls, lsp_prev)   # 상승 추세: 라인을 올림 (내려오지 않음)
             else:
                 lsp = ls             # 추세 꺾임 or 보합: 현재 MAvg-fark로 리셋
             # Pine: shortStop := MAvg < shortStopPrev ? min(shortStop, shortStopPrev) : shortStop
-            if ma < ssp:
-                ssp = min(ss, ssp)   # 하락 추세: 라인을 내림 (올라오지 않음)
+            if ma < ssp_prev:
+                ssp = min(ss, ssp_prev)   # 하락 추세: 라인을 내림 (올라오지 않음)
             else:
                 ssp = ss             # 추세 꺾임 or 보합: 현재 MAvg+fark로 리셋
             # dir 상태 전환
-            if dv == -1 and ma > ssp: dv = 1
-            elif dv == 1 and ma < lsp: dv = -1
+            if dv == -1 and ma > ssp_prev: dv = 1
+            elif dv == 1 and ma < lsp_prev: dv = -1
             mt = lsp if dv == 1 else ssp
             hott[i] = mt * (200 + percent) / 200 if ma > mt else mt * (200 - percent) / 200
         return hott
@@ -486,7 +509,6 @@ metrics = {
     "Win Rate (%)":     round(np.nan_to_num(float(stats.get('Win Rate [%]', 0.0))), 2),
     "MDD (%)":          round(np.nan_to_num(float(portfolio.max_drawdown() * 100.0)), 2),
     "Total Trades":     int(portfolio.trades.count()),
-    "Total Profit":     round(np.nan_to_num(float(portfolio.total_profit())), 2),
-    "Total Fees":       round(np.nan_to_num(float(portfolio.total_fees())), 2),
+    "Total Profit":     round(np.nan_to_num(float(portfolio.total_profit())), 2)
 }
 print(metrics)
