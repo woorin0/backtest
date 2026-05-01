@@ -22,8 +22,7 @@ def create_excel_report(study, data_df):
             "Win Rate (%)": t.user_attrs.get("Win Rate (%)", 0.0),
             "MDD (%)": t.user_attrs.get("MDD (%)", 0.0),
             "Total Trades": t.user_attrs.get("Total Trades", 0),
-            "Total Profit ($)": t.user_attrs.get("Total Profit", 0.0),
-            "Total Fees ($)": round(t.user_attrs.get("Total Fees", 0.0), 2)
+            "Total Profit ($)": t.user_attrs.get("Total Profit", 0.0)
         }
         
         # 전략 파라미터 (Params)
@@ -35,7 +34,7 @@ def create_excel_report(study, data_df):
     
     # 파인스크립트 소스코드와 동일한 논리적 정렬 순서 정의 (사용자 요청 순서 반영)
     PINE_ORDER = [
-        "Rank", "Total Return (%)", "Win Rate (%)", "MDD (%)", "Total Trades", "Total Profit ($)", "Total Fees ($)",
+        "Rank", "Total Return (%)", "Win Rate (%)", "MDD (%)", "Total Trades", "Total Profit ($)",
         "hl_price", "open_at_hl", "open_at_ll", "exit_at_hl", "exit_at_ll", "hl_tp_price", "hl_sl_price", "tr_hl",
         "ll_volatility_filter", "ma1_len", "ll_mult", "ma2_type", "ma2_len", "bb_ma_type", "bb_length", "bb_dev", "bb_min_width",
         "hott_length", "hott_percent", "hott_h_length", "hott_ma_type", "hott_h_src", "high_int", "entry_ll_per",
