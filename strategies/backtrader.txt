@@ -248,5 +248,5 @@ t_info = results[0].analyzers.trades.get_analysis(); d_info = results[0].analyze
 total_tr = t_info.total.total if 'total' in t_info else 0
 win_rate = round((t_info.won.total / total_tr) * 100, 2) if total_tr > 0 and 'won' in t_info else 0.0
 mdd = round(d_info.max.drawdown, 2) if 'max' in d_info and 'drawdown' in d_info.max else 0.0
-metrics = {"Total Return (%)": round((final_val-init_val)/init_val*100, 2), "Total Profit": round(final_val-init_val, 2), "Win Rate (%)": win_rate, "MDD (%)": mdd, "Total Trades": total_tr, "Total Fees": round(sum([order.executed.comm for order in results[0].broker.orders if order.status == order.Completed]), 2)}
+metrics = {"Total Return (%)": round((final_val-init_val)/init_val*100, 2), "Total Profit": round(final_val-init_val, 2), "Win Rate (%)": win_rate, "MDD (%)": mdd, "Total Trades": total_tr}
 print(metrics)
