@@ -409,10 +409,11 @@ if 'JIT_ORDER_V5' not in globals():
                 return vbt.portfolio.nb.order_nothing_nb()
 
             # --- 청산 조건 체크 ---
-            if exit_mode == 0:  # limits 모드: 고가/저가로 체크
+            is_htf_end = (i == len(cl) - 1) or (htf_id_t[i] != htf_id_t[i+1])
+            if exit_mode == 0:  # limits 모드: 고가/저가로 체크 (Intra-bar)
                 is_hit = (h[i] >= tpp) or (l[i] <= slp)
             else:               # close 모드: 종가로 체크 (barstate.isconfirmed)
-                is_hit = (cl[i] >= tpp) or (cl[i] <= slp)
+                is_hit = is_htf_end and ((cl[i] >= tpp) or (cl[i] <= slp))
 
             if is_hit:
                 if exit_mode == 0:  # limits
