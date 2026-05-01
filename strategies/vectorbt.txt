@@ -351,9 +351,9 @@ if 'JIT_ORDER_V5' not in globals():
 
             # LL 진입
             if not np.isnan(llp_cur) and llp_cur > 0:
-                if o_m_l == 0:  # limits
+                if o_m_l == 0:  # limits (Pine: limit)
                     if l[i] <= llp_cur and cur_htf != last_act_a[1]:
-                        ep = min(o[i], llp_cur) - slip
+                        ep = min(o[i], llp_cur) # Limit order: no negative slippage
                         if ep <= 0: ep = tick
                         qty = np.floor((cash * 0.9992 / ep) * p10 + 0.5) / p10
                         if qty > 0:
@@ -362,7 +362,7 @@ if 'JIT_ORDER_V5' not in globals():
                             return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=0, fees=0.0008)
                 else:  # close
                     if ll_sig_t[i] > 0 and ll_sig_t[i] != last_act_a[1]:
-                        ep = o[i] - slip
+                        ep = o[i] + slip # Long entry close: ADD slip
                         if ep <= 0: ep = tick
                         qty = np.floor((cash * 0.9992 / ep) * p10 + 0.5) / p10
                         if qty > 0:
@@ -476,6 +476,7 @@ portfolio = vbt.Portfolio.from_order_func(
     slippage_ticks, ex_dec,
     id_arr, price_arr, size_arr, last_act_a,
     init_cash=400.0,
+    fees=0.0008,
     freq='1m'
 )
 

@@ -47,7 +47,8 @@ def get_study(study_name):
         try:
             return optuna.create_study(study_name=study_name, storage=storage, direction="maximize", load_if_exists=True)
         except Exception as e:
-            if "alembic_version" in str(e) or "locked" in str(e).lower() or "UNIQUE constraint" in str(e):
+            err_str = str(e).lower()
+            if "alembic" in err_str or "locked" in err_str or "unique" in err_str or "commit" in err_str or "dataerror" in err_str or "exceeding max length" in err_str:
                 time.sleep(1) # 다른 워커가 DB 초기화를 마칠 때까지 대기
             else:
                 raise

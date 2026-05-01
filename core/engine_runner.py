@@ -104,7 +104,8 @@ def run_vectorbt(code_str: str, data: pd.DataFrame, optuna_trial=None):
         exec(code_str, exec_globals)
         metrics = exec_globals.get('metrics')
         if not metrics or not isinstance(metrics, dict):
-            return False, "metrics 딕셔너리 누락"
+            keys = [k for k in exec_globals.keys() if not k.startswith('__')]
+            return False, f"metrics 딕셔너리 누락. 현재 변수들: {keys[:20]}..."
             
         # 수치 무결성 검사 (VectorBT 연산 결과 NaN 방어)
         for k, v in metrics.items():
