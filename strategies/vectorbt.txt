@@ -510,7 +510,6 @@ metrics = {
     "Win Rate (%)":     round(np.nan_to_num(float(stats.get('Win Rate [%]', 0.0))), 2),
     "MDD (%)":          round(np.nan_to_num(float(portfolio.max_drawdown() * 100.0)), 2),
     "Total Trades":     int(portfolio.trades.count()),
-    "Total Profit":     round(np.nan_to_num(float(portfolio.total_profit())), 2),
-    "Total Fees":       round(np.nan_to_num(float(portfolio.orders.records['fees'].sum())), 2),
+    "Total Profit":     round(np.nan_to_num(float(portfolio.total_profit())), 2)
 }
 print(metrics)
