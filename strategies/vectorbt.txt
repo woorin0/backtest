@@ -326,7 +326,7 @@ id_arr[:] = 0; price_arr[:] = 0.0; size_arr[:] = 0.0; last_act_a[:] = 0.0
 # =========[ 주문 함수 ]=========
 if 'JIT_ORDER_V5' not in globals():
     @njit
-    def order_func_nb(c,
+    def order_func_nb(ctx,
                       o, h, l, cl,
                       hlp_t, llp_t,
                       hl_sig_t, ll_sig_t, tr_sig_t, htf_id_t,
@@ -341,12 +341,12 @@ if 'JIT_ORDER_V5' not in globals():
                       slip_ticks, dec,
                       id_a, price_a, size_a, last_act_a):
 
-        i = c.i; col = c.col
+        i = ctx.i; col = ctx.col
         if i < 1:
             return vbt.portfolio.nb.order_nothing_nb()
 
-        pos  = c.position_now
-        cash = c.cash_now
+        pos = ctx.position_now
+        cash = ctx.cash_now
         p10  = 10.0 ** dec
         tick = 1.0 / p10
         slip = slip_ticks * tick
@@ -364,7 +364,7 @@ if 'JIT_ORDER_V5' not in globals():
                 if o_m_h == 0:  # limits (stop order)
                     if h[i] >= hlp_cur and cur_htf != last_act_a[0]:
                         ep = max(o[i], hlp_cur) + slip
-                        qty = np.floor((cash * 0.9992 / cl[i-1]) * p10 + 0.5) / p10
+                        qty = np.floor((cash * 0.9992 / cl[i]) * p10 + 0.5) / p10
                         if qty > 0:
                             id_a[col] = 1; price_a[col] = ep; size_a[col] = qty
                             last_act_a[0] = cur_htf
@@ -372,7 +372,7 @@ if 'JIT_ORDER_V5' not in globals():
                 else:  # close 모드 (HTF 종가 시그널)
                     if hl_sig_t[i] > 0 and hl_sig_t[i] != last_act_a[0]:
                         ep = o[i] + slip
-                        qty = np.floor((cash * 0.9992 / cl[i-1]) * p10 + 0.5) / p10
+                        qty = np.floor((cash * 0.9992 / cl[i]) * p10 + 0.5) / p10
                         if qty > 0:
                             id_a[col] = 1; price_a[col] = ep; size_a[col] = qty
                             last_act_a[0] = hl_sig_t[i]
@@ -384,7 +384,7 @@ if 'JIT_ORDER_V5' not in globals():
                     if l[i] <= llp_cur and cur_htf != last_act_a[1]:
                         ep = min(o[i], llp_cur) # Limit order: no negative slippage
                         if ep <= 0: ep = tick
-                        qty = np.floor((cash * 0.9992 / cl[i-1]) * p10 + 0.5) / p10
+                        qty = np.floor((cash * 0.9992 / cl[i]) * p10 + 0.5) / p10
                         if qty > 0:
                             id_a[col] = 2; price_a[col] = ep; size_a[col] = qty
                             last_act_a[1] = cur_htf
@@ -393,7 +393,7 @@ if 'JIT_ORDER_V5' not in globals():
                     if ll_sig_t[i] > 0 and ll_sig_t[i] != last_act_a[1]:
                         ep = o[i] + slip # Long entry close: ADD slip
                         if ep <= 0: ep = tick
-                        qty = np.floor((cash * 0.9992 / cl[i-1]) * p10 + 0.5) / p10
+                        qty = np.floor((cash * 0.9992 / cl[i]) * p10 + 0.5) / p10
                         if qty > 0:
                             id_a[col] = 2; price_a[col] = ep; size_a[col] = qty
                             last_act_a[1] = ll_sig_t[i]
