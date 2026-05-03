@@ -113,32 +113,57 @@ HL_SL_AtrMul  = input.float(defval = 4.0, title = 'HL SL Multiplier ', minval = 
 hasOpenTrade   = strategy.opentrades > 0
 lastEntryPrice = hasOpenTrade ? strategy.opentrades.entry_price(strategy.opentrades - 1) : na
 
+// =========[ Plot Lines ]=========
+HLPlot = float(na)
+hott_val = HOTT
+if High_Int > 0 and bar_index > High_Int
+    hott_val := HOTT[High_Int]
+hott_plot = nz(hott_val)
+
+if HLPrice == 'BB'
+    HLPlot := lbbUpper
+else if HLPrice == 'H/L OTT'
+    HLPlot := hott_plot
+else if HLPrice == 'MAX'
+    HLPlot := math.max(hott_plot, lbbUpper)
+
+BasisPlot1 = lbbMiddle
+plot(HLPlot, 'Upper', color = color.new(color.green, 0))
+plot(BasisPlot1, 'Basis_HL', color = color.new(color.yellow, 0))
+
+LL_volat_cond = LL_VolatilityFilter ? ma2 * (1 - ma1 * LLmult - Entry_LL) : ma2 * (1 - Entry_LL)
+LLPlot = LL_volat_cond
+
 // =========[ TP/SL 계산 ]=========
+// 기준 가격: 포지션이 있으면 진입가, 없으면 예정된 진입가(HLPlot/LLPlot)
+calcPrice_HL = not na(lastEntryPrice) ? lastEntryPrice : HLPlot
+calcPrice_LL = not na(lastEntryPrice) ? lastEntryPrice : LLPlot
+
 TP_Plot = float(na)
-if hasOpenTrade and not na(lastEntryPrice)
+if not na(calcPrice_HL)
     if HL_TP_Price == 'Fixed'
-        TP_Plot := lastEntryPrice * (1 + TP_HL_f)
+        TP_Plot := calcPrice_HL * (1 + TP_HL_f)
     if HL_TP_Price == 'ATR'
-        TP_Plot := lastEntryPrice + longTakeProfitAtrMul * openAtr
+        TP_Plot := calcPrice_HL + longTakeProfitAtrMul * openAtr
     if HL_TP_Price == 'both'
-        TP_Plot := math.max(lastEntryPrice * (1 + TP_HL_f), lastEntryPrice + longTakeProfitAtrMul * openAtr)
+        TP_Plot := math.max(calcPrice_HL * (1 + TP_HL_f), calcPrice_HL + longTakeProfitAtrMul * openAtr)
 
 TP_Plot1 = float(na)
-if hasOpenTrade and not na(lastEntryPrice)
-    TP_Plot1 := lastEntryPrice * (1 + TP_LL_f)
+if not na(calcPrice_LL)
+    TP_Plot1 := calcPrice_LL * (1 + TP_LL_f)
 
 Stop_HL_Price = float(na)
-if hasOpenTrade and not na(lastEntryPrice)
+if not na(calcPrice_HL)
     if HL_SL_Price == 'Fixed'
-        Stop_HL_Price := lastEntryPrice * (1 - SL_HL_f)
+        Stop_HL_Price := calcPrice_HL * (1 - SL_HL_f)
     if HL_SL_Price == 'ATR'
-        Stop_HL_Price := lastEntryPrice - HL_SL_AtrMul * HL_SL_openAtr
+        Stop_HL_Price := calcPrice_HL - HL_SL_AtrMul * HL_SL_openAtr
     if HL_SL_Price == 'both'
-        Stop_HL_Price := math.max(lastEntryPrice * (1 - SL_HL_f), lastEntryPrice - HL_SL_AtrMul * HL_SL_openAtr)
+        Stop_HL_Price := math.max(calcPrice_HL * (1 - SL_HL_f), calcPrice_HL - HL_SL_AtrMul * HL_SL_openAtr)
 
 Stop_LL_Price = float(na)
-if hasOpenTrade and not na(lastEntryPrice)
-    Stop_LL_Price := lastEntryPrice * (1 - SL_LL_f)
+if not na(calcPrice_LL)
+    Stop_LL_Price := calcPrice_LL * (1 - SL_LL_f)
 
 TP_HL = not na(TP_Plot) and TP_Plot <= close
 SL_HL = not na(Stop_HL_Price) and Stop_HL_Price >= close
@@ -153,26 +178,7 @@ TR_ma = ma(TR_ma_source, TR_ma_length, TR_ma_type)
 closeLongPosition = ta.crossunder(close, TR_ma)
 plot(TR_ma, 'TR ma', color = color.red)
 
-// =========[ Plot Lines ]=========
-HLPlot = float(na)
-hott_val = HOTT
-if High_Int > 0 and bar_index > High_Int
-    hott_val := HOTT[High_Int]
-hott_plot = nz(hott_val) 
 
-if HLPrice == 'BB'
-    HLPlot := lbbUpper
-else if HLPrice == 'H/L OTT'
-    HLPlot := hott_plot
-else if HLPrice == 'MAX'
-    HLPlot := math.max(hott_plot, lbbUpper)
-    
-BasisPlot1 = lbbMiddle
-plot(HLPlot, 'Upper', color = color.new(color.green, 0))
-plot(BasisPlot1, 'Basis_HL', color = color.new(color.yellow, 0))
-
-LL_volat_cond = LL_VolatilityFilter ? ma2 * (1 - ma1 * LLmult - Entry_LL) : ma2 * (1 - Entry_LL)
-LLPlot = LL_volat_cond
 
 BasisPlot2 = ma2
 
@@ -250,8 +256,9 @@ if ExitAtHL == 'limits'
     tp_ok = not na(_tp)
     sl_ok = not na(_sl)
     if tp_ok or sl_ok
-        HL_qty = na(hl_entry_installment_qty) ? strategy.position_size : hl_entry_installment_qty
-        HL_qty := math.min(HL_qty, math.abs(strategy.position_size))
+        // 포지션이 0일 때는 진입 예약 수량을 참조하도록 개선
+        fallback_qty = na(hl_entry_installment_qty) ? qty_hl : hl_entry_installment_qty
+        HL_qty = strategy.position_size > 0 ? math.min(fallback_qty, math.abs(strategy.position_size)) : fallback_qty
         if f_hasQty(HL_qty)
             strategy.exit('Exit HL', 'HL', qty = HL_qty, limit = tp_ok ? _tp : na, stop = sl_ok ? _sl : na, alert_message = POA.exit_message(''))
 
