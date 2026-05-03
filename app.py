@@ -228,9 +228,13 @@ if active_task:
             
             # 워커 상세 진단
             diag_text = ""
-            for wid in active_task.get("worker_ids", []):
-                stat = status_redis.get(f"worker_status_{wid}") or "⏳ 대기 중"
-                diag_text += f"- **워커 {wid[:6]}**: {stat}\n"
+            worker_ids = active_task.get("worker_ids", [])
+            if worker_ids:
+                keys = [f"worker_status_{wid}" for wid in worker_ids]
+                stats = status_redis.mget(keys)
+                for wid, stat in zip(worker_ids, stats):
+                    stat_val = stat or "⏳ 대기 중"
+                    diag_text += f"- **워커 {wid[:6]}**: {stat_val}\n"
             diag_slot.markdown(diag_text)
             
             if not tk.ready():
