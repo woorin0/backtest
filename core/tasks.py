@@ -37,7 +37,6 @@ celery_app.conf.update(
 )
 
 def get_study(study_name):
-    import time
     # 🚀 [V19] SQLite Alembic 동시 초기화 충돌(IntegrityError) 및 Lock 완벽 방어
     storage = optuna.storages.RDBStorage(
         url="sqlite:///optuna_results.db",
@@ -282,7 +281,6 @@ def finalize_optuna_study(self, worker_results, study_name: str, data_path: str,
             if cur_i < tot_i:
                 params = active_task_dict.get("params", {})
                 from celery import uuid, chord
-                import optuna
                 
                 next_sn = f"study_{int(time.time())}"
                 get_study(next_sn)
@@ -308,7 +306,6 @@ def finalize_optuna_study(self, worker_results, study_name: str, data_path: str,
                 # 디스크 파일 덮어쓰기 (프론트엔드가 깨어나면 이 파일을 읽고 최신 상태 인지)
                 cache_file = os.path.join(os.getcwd(), ".active_task.json")
                 with open(cache_file, "w") as f:
-                    import json
                     json.dump(next_active_task, f)
 
         return {"status": "SUCCESS", "best_value": best_value, "excel_file": file_path}
