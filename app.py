@@ -25,15 +25,17 @@ if "logged_in" not in st.session_state:
     st.session_state["logged_in"] = False
 
 if not st.session_state["logged_in"]:
+    app_password = os.getenv("APP_PASSWORD")
+    if not app_password:
+        st.error("서버 보안 설정(APP_PASSWORD)이 누락되었습니다.")
+        st.stop()
+
     st.markdown("<h1 style='text-align: center;'>🔐 시스템 보안 인증</h1>", unsafe_allow_html=True)
     pwd = st.text_input("액세스 키", type="password")
     if st.button("인증"):
-        app_password = os.getenv("APP_PASSWORD")
-        if app_password and pwd == app_password:
+        if pwd == app_password:
             st.session_state["logged_in"] = True
             st.rerun()
-        elif not app_password:
-            st.error("서버 보안 설정(APP_PASSWORD)이 누락되었습니다.")
         else:
             st.error("인증 키가 올바르지 않습니다.")
     st.stop()
