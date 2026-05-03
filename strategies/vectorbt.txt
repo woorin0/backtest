@@ -322,12 +322,25 @@ htf_id_t = align_to_ltf(htf_idx, df_htf, df_ltf)
 
 # =========[ 상태 배열 (매 Trial마다 반드시 새로 초기화) ]=========
 # [BUG FIX] globals() 캐싱으로 인한 이전 Trial 상태 오염 방지
-id_arr    = np.zeros(1, dtype=np.int32)
-price_arr = np.zeros(1, dtype=np.float64)
-size_arr  = np.zeros(1, dtype=np.float64)
-last_act_a = np.zeros(3, dtype=np.float64)  # 0: HL entry, 1: LL entry, 2: TR exit
-# 캐시에서 이전 값이 남아있을 경우를 대비해 명시적으로 0으로 덮어쓰기
-id_arr[:] = 0; price_arr[:] = 0.0; size_arr[:] = 0.0; last_act_a[:] = 0.0
+if 'prev_results' in globals(): del globals()['prev_results']
+if 'my_state' in globals(): del globals()['my_state']
+
+if 'id_arr' not in globals():
+    globals()['id_arr']    = np.zeros(1, dtype=np.int32)
+    globals()['price_arr'] = np.zeros(1, dtype=np.float64)
+    globals()['size_arr']  = np.zeros(1, dtype=np.float64)
+    globals()['last_act_a'] = np.zeros(3, dtype=np.float64)  # 0: HL entry, 1: LL entry, 2: TR exit
+
+id_arr    = globals()['id_arr']
+price_arr = globals()['price_arr']
+size_arr  = globals()['size_arr']
+last_act_a = globals()['last_act_a']
+
+# 캐시에서 이전 값이 남아있을 경우를 대비해 명시적으로 0으로 덮어쓰기 (In-place)
+id_arr[:] = 0
+price_arr[:] = 0.0
+size_arr[:] = 0.0
+last_act_a[:] = 0.0
 
 # =========[ 주문 함수 ]=========
 if 'JIT_ORDER_V5' not in globals():
@@ -345,7 +358,8 @@ if 'JIT_ORDER_V5' not in globals():
                       tpl, sll,
                       tpm, slm,
                       slip_ticks, dec,
-                      id_a, price_a, size_a, last_act_a):
+                      id_a, price_a, size_a, last_act_a,
+                      fee_rate):
 
         i = ctx.i; col = ctx.col
         if i < 1:
@@ -374,7 +388,7 @@ if 'JIT_ORDER_V5' not in globals():
                         if qty > 0:
                             id_a[col] = 1; price_a[col] = ep; size_a[col] = qty
                             last_act_a[0] = cur_htf
-                            return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=0, fees=0.0008)
+                            return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=0, fees=fee_rate)
                 else:  # close 모드 (HTF 종가 시그널)
                     if hl_sig_t[i] > 0 and hl_sig_t[i] != last_act_a[0]:
                         ep = o[i] + slip
@@ -382,7 +396,7 @@ if 'JIT_ORDER_V5' not in globals():
                         if qty > 0:
                             id_a[col] = 1; price_a[col] = ep; size_a[col] = qty
                             last_act_a[0] = hl_sig_t[i]
-                            return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=0, fees=0.0008)
+                            return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=0, fees=fee_rate)
 
             # LL 진입
             if not np.isnan(llp_cur) and llp_cur > 0:
@@ -394,7 +408,7 @@ if 'JIT_ORDER_V5' not in globals():
                         if qty > 0:
                             id_a[col] = 2; price_a[col] = ep; size_a[col] = qty
                             last_act_a[1] = cur_htf
-                            return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=0, fees=0.0008)
+                            return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=0, fees=fee_rate)
                 else:  # close
                     if ll_sig_t[i] > 0 and ll_sig_t[i] != last_act_a[1]:
                         ep = o[i] + slip # Long entry close: ADD slip
@@ -403,7 +417,7 @@ if 'JIT_ORDER_V5' not in globals():
                         if qty > 0:
                             id_a[col] = 2; price_a[col] = ep; size_a[col] = qty
                             last_act_a[1] = ll_sig_t[i]
-                            return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=0, fees=0.0008)
+                            return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=0, fees=fee_rate)
 
         # ====== 청산 (포지션 있을 때) ======
         if pos > 0:
@@ -415,7 +429,7 @@ if 'JIT_ORDER_V5' not in globals():
                 if tr_sig_t[i] > 0 and tr_sig_t[i] != last_act_a[2]:
                     exit_p = o[i] - slip
                     last_act_a[2] = tr_sig_t[i]
-                    return vbt.portfolio.nb.order_nb(size=-pos, price=exit_p, size_type=0, fees=0.0008)
+                    return vbt.portfolio.nb.order_nb(size=-pos, price=exit_p, size_type=0, fees=fee_rate)
 
             # --- TP / SL 계산 ---
             if cur_state == 1:  # HL 포지션
@@ -479,9 +493,9 @@ if 'JIT_ORDER_V5' not in globals():
                 if cur_state == 1 and inst_num == 2:
                     half = np.ceil((size_a[col] / 2.0) * p10) / p10
                     if pos > half:
-                        return vbt.portfolio.nb.order_nb(size=-half, price=exit_p, size_type=0, fees=0.0008)
+                        return vbt.portfolio.nb.order_nb(size=-half, price=exit_p, size_type=0, fees=fee_rate)
 
-                return vbt.portfolio.nb.order_nb(size=-pos, price=exit_p, size_type=0, fees=0.0008)
+                return vbt.portfolio.nb.order_nb(size=-pos, price=exit_p, size_type=0, fees=fee_rate)
 
         return vbt.portfolio.nb.order_nothing_nb()
 
@@ -500,6 +514,7 @@ s_m    = t_map.get(sl_hl_type, 1)
 
 # [BUG FIX] 수수료를 글로벌 설정이 아닌 from_order_func에 직접 주입
 # vbt.settings.portfolio['fees']는 from_order_func에 자동 적용되지 않음
+# 주의: from_order_func 자체에 fees=... 키워드 인자를 넘기면 Portfolio.__init__() 오류가 발생하므로 위치 인자(0.0008)로 넘겨 내부 Numba 함수(fee_rate)에서 처리함.
 portfolio = vbt.Portfolio.from_order_func(
     c_np,
     order_func_nb,
@@ -516,6 +531,7 @@ portfolio = vbt.Portfolio.from_order_func(
     hl_tp_atr_mul, hl_sl_atr_mul,
     slippage_ticks, ex_dec,
     id_arr, price_arr, size_arr, last_act_a,
+    0.0008,
     init_cash=400.0,
     freq='1m'
 )
