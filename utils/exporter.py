@@ -77,3 +77,12 @@ def create_excel_report(study, data_df):
             
     output.seek(0)
     return output, report_df
+
+# 기존 함수 유지 (호환성용)
+def create_excel_buffer(data, results):
+    # 이 함수는 이제 사용되지 않거나 리팩토링 대상입니다.
+    # 새로운 create_excel_report를 사용하도록 tasks.py를 수정할 것입니다.
+    output = io.BytesIO()
+    pd.DataFrame(results).to_excel(output, index=False)
+    output.seek(0)
+    return output

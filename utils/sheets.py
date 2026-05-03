@@ -6,6 +6,7 @@
 
 import os
 import requests
+import json
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -33,9 +34,17 @@ def push_to_google_sheets(report_df, engine: str, symbol: str, timeframe: str):
         
         # DataFrame → 헤더 + 행 데이터로 변환
         headers = report_df.columns.tolist()
-        # fillna(0.0)으로 NaN 값을 0.0으로 대체하고,
-        # values.tolist()를 호출하면 numpy 타입도 파이썬 기본 타입으로 자동 변환되어 JSON 직렬화가 가능해집니다.
-        rows = report_df.fillna(0.0).values.tolist()
+        rows = []
+        for _, row in report_df.iterrows():
+            row_data = []
+            for val in row.tolist():
+                # JSON 직렬화를 위한 타입 변환
+                if hasattr(val, 'item'):  # numpy 타입 처리
+                    val = val.item()
+                if isinstance(val, float) and (val != val):  # NaN 체크
+                    val = 0.0
+                row_data.append(val)
+            rows.append(row_data)
         
         payload = {
             "sheet_name": sheet_name,
