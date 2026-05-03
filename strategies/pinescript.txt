@@ -250,7 +250,7 @@ if ExitAtLL == 'close' and barstate.isconfirmed and strategy.position_size > 0 a
     strategy.close('LL', comment = 'Close_LL', alert_message = POA.close_message(''))
 
 // —— TP/SL 동시 지정 (limits 모드)
-if ExitAtHL == 'limits'
+if ExitAtHL == 'limits' and strategy.position_size > 0
     _tp = safeLimit(TP_Plot)
     _sl = safeStop(Stop_HL_Price)
     tp_ok = not na(_tp)
@@ -259,16 +259,18 @@ if ExitAtHL == 'limits'
         // 포지션이 0일 때는 진입 예약 수량을 참조하도록 개선
         fallback_qty = na(hl_entry_installment_qty) ? qty_hl : hl_entry_installment_qty
         HL_qty = strategy.position_size > 0 ? math.min(fallback_qty, math.abs(strategy.position_size)) : fallback_qty
-        if f_hasQty(HL_qty)
-            strategy.exit('Exit HL', 'HL', qty = HL_qty, limit = tp_ok ? _tp : na, stop = sl_ok ? _sl : na, alert_message = POA.exit_message(''))
+        // Installment가 1이면 qty를 지정하지 않아(na) 전량 청산 유도 (먼지 방지)
+        final_qty = (Installment == 1) ? na : (f_hasQty(HL_qty) ? HL_qty : na)
+        strategy.exit('Exit HL', 'HL', qty = final_qty, limit = tp_ok ? _tp : na, stop = sl_ok ? _sl : na, alert_message = POA.exit_message(''))
 
-if ExitAtLL == 'limits'
+if ExitAtLL == 'limits' and strategy.position_size > 0
     _tp1 = safeLimit(TP_Plot1)
     _sl1 = safeStop(Stop_LL_Price)
     tp_ok1 = not na(_tp1)
     sl_ok1 = not na(_sl1)
     if tp_ok1 or sl_ok1
-        strategy.exit('Exit LL', 'LL', limit = tp_ok1 ? _tp1 : na, stop = sl_ok1 ? _sl1 : na, alert_message = POA.exit_message(''))
+        // LL은 전량 청산이 기본이므로 qty=na 적용
+        strategy.exit('Exit LL', 'LL', qty = na, limit = tp_ok1 ? _tp1 : na, stop = sl_ok1 ? _sl1 : na, alert_message = POA.exit_message(''))
 
 // —— TR 조건 즉시 청산
 if TR_HL == 'On' and closeLongPosition and strategy.position_size > 0 and barstate.isconfirmed
