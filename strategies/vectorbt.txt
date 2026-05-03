@@ -316,6 +316,9 @@ htf_id_t = align_to_ltf(htf_idx, df_htf, df_ltf)
 
 # =========[ 상태 배열 (매 Trial마다 반드시 새로 초기화) ]=========
 # [BUG FIX] globals() 캐싱으로 인한 이전 Trial 상태 오염 방지
+if 'prev_results' in globals(): del globals()['prev_results']
+if 'my_state' in globals(): del globals()['my_state']
+
 id_arr    = np.zeros(1, dtype=np.int32)
 price_arr = np.zeros(1, dtype=np.float64)
 size_arr  = np.zeros(1, dtype=np.float64)
