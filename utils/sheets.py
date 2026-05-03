@@ -35,9 +35,10 @@ def push_to_google_sheets(report_df, engine: str, symbol: str, timeframe: str):
         # DataFrame → 헤더 + 행 데이터로 변환
         headers = report_df.columns.tolist()
         rows = []
-        for _, row in report_df.iterrows():
+        # iterrows() 대신 values.tolist()를 사용하여 성능 최적화
+        for row in report_df.values.tolist():
             row_data = []
-            for val in row.tolist():
+            for val in row:
                 # JSON 직렬화를 위한 타입 변환
                 if hasattr(val, 'item'):  # numpy 타입 처리
                     val = val.item()
