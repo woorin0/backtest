@@ -325,16 +325,22 @@ htf_id_t = align_to_ltf(htf_idx, df_htf, df_ltf)
 if 'prev_results' in globals(): del globals()['prev_results']
 if 'my_state' in globals(): del globals()['my_state']
 
-for _var in ['id_arr', 'price_arr', 'size_arr', 'last_act_a']:
-    if _var in globals():
-        del globals()[_var]
+if 'id_arr' not in globals():
+    globals()['id_arr']    = np.zeros(1, dtype=np.int32)
+    globals()['price_arr'] = np.zeros(1, dtype=np.float64)
+    globals()['size_arr']  = np.zeros(1, dtype=np.float64)
+    globals()['last_act_a'] = np.zeros(3, dtype=np.float64)  # 0: HL entry, 1: LL entry, 2: TR exit
 
-id_arr    = np.zeros(1, dtype=np.int32)
-price_arr = np.zeros(1, dtype=np.float64)
-size_arr  = np.zeros(1, dtype=np.float64)
-last_act_a = np.zeros(3, dtype=np.float64)  # 0: HL entry, 1: LL entry, 2: TR exit
-# 캐시에서 이전 값이 남아있을 경우를 대비해 명시적으로 0으로 덮어쓰기
-id_arr[:] = 0; price_arr[:] = 0.0; size_arr[:] = 0.0; last_act_a[:] = 0.0
+id_arr    = globals()['id_arr']
+price_arr = globals()['price_arr']
+size_arr  = globals()['size_arr']
+last_act_a = globals()['last_act_a']
+
+# 캐시에서 이전 값이 남아있을 경우를 대비해 명시적으로 0으로 덮어쓰기 (In-place)
+id_arr[:] = 0
+price_arr[:] = 0.0
+size_arr[:] = 0.0
+last_act_a[:] = 0.0
 
 # =========[ 주문 함수 ]=========
 if 'JIT_ORDER_V5' not in globals():
