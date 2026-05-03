@@ -1,5 +1,6 @@
 import sys
 from unittest.mock import MagicMock
+import pytest
 
 # Mock missing dependencies before importing the module under test
 sys.modules['ccxt'] = MagicMock()
@@ -30,3 +31,19 @@ def test_get_timeframe_ms_default():
     # Default is 1 hour (3600000 ms) for unknown units
     assert get_timeframe_ms('1x') == 3600000
     assert get_timeframe_ms('10z') == 3600000
+
+def test_get_timeframe_ms_empty_string():
+    with pytest.raises(IndexError):
+        get_timeframe_ms("")
+
+def test_get_timeframe_ms_missing_number():
+    with pytest.raises(ValueError):
+        get_timeframe_ms("m")
+
+def test_get_timeframe_ms_invalid_number():
+    with pytest.raises(ValueError):
+        get_timeframe_ms("abcm")
+
+def test_get_timeframe_ms_none_input():
+    with pytest.raises(TypeError):
+        get_timeframe_ms(None)
