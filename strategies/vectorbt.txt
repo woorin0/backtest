@@ -94,34 +94,38 @@ if 'JIT_COMPILED_V5' not in globals():
     def calc_hott_nb(mavg_np, percent):
         n = len(mavg_np)
         hott = np.full(n, np.nan)
-        lsp = np.nan; ssp = np.nan; dv = 1
-        first = True
+        lsp_prev_val = np.nan
+        ssp_prev_val = np.nan
+        dir_val = 1
+
         for i in range(n):
             ma = mavg_np[i]
-            if np.isnan(ma): continue
-            fk = ma * percent * 0.01
-            ls = ma - fk; ss = ma + fk
-            if first:
-                lsp = ls; ssp = ss; first = False; continue
-            lsp_prev = lsp
-            ssp_prev = ssp
+            if np.isnan(ma):
+                continue
 
-            # Pine: longStop := MAvg > longStopPrev ? max(longStop, longStopPrev) : longStop
-            # 'else longStop' = base longStop = current MAvg - fark = ls
-            if ma > lsp_prev:
-                lsp = max(ls, lsp_prev)   # 상승 추세: 라인을 올림 (내려오지 않음)
-            else:
-                lsp = ls             # 추세 꺾임 or 보합: 현재 MAvg-fark로 리셋
-            # Pine: shortStop := MAvg < shortStopPrev ? min(shortStop, shortStopPrev) : shortStop
-            if ma < ssp_prev:
-                ssp = min(ss, ssp_prev)   # 하락 추세: 라인을 내림 (올라오지 않음)
-            else:
-                ssp = ss             # 추세 꺾임 or 보합: 현재 MAvg+fark로 리셋
-            # dir 상태 전환
-            if dv == -1 and ma > ssp_prev: dv = 1
-            elif dv == 1 and ma < lsp_prev: dv = -1
+            fk = ma * percent * 0.01
+            ls = ma - fk
+            ss = ma + fk
+
+            lsp_prev = ls if np.isnan(lsp_prev_val) else lsp_prev_val
+            ssp_prev = ss if np.isnan(ssp_prev_val) else ssp_prev_val
+
+            lsp = max(ls, lsp_prev) if ma > lsp_prev else ls
+            ssp = min(ss, ssp_prev) if ma < ssp_prev else ss
+
+            dv = dir_val
+            if dv == -1 and ma > ssp_prev:
+                dv = 1
+            elif dv == 1 and ma < lsp_prev:
+                dv = -1
+
+            lsp_prev_val = lsp
+            ssp_prev_val = ssp
+            dir_val = dv
+
             mt = lsp if dv == 1 else ssp
             hott[i] = mt * (200 + percent) / 200 if ma > mt else mt * (200 - percent) / 200
+
         return hott
 
     globals()['JIT_COMPILED_V5'] = True
@@ -135,6 +139,8 @@ if 'JIT_ATR_PINE' not in globals():
     def calc_atr_pine_nb(h, l, c, length):
         n = len(h)
         tr = np.full(n, np.nan)
+        if n > 0:
+            tr[0] = h[0] - l[0]
         for i in range(1, n):
             hl  = h[i] - l[i]
             hpc = abs(h[i] - c[i - 1])
@@ -364,7 +370,7 @@ if 'JIT_ORDER_V5' not in globals():
                 if o_m_h == 0:  # limits (stop order)
                     if h[i] >= hlp_cur and cur_htf != last_act_a[0]:
                         ep = max(o[i], hlp_cur) + slip
-                        qty = np.floor((cash * 0.9992 / cl[i-1]) * p10 + 0.5) / p10
+                        qty = np.floor((cash / cl[i-1]) * p10 + 0.5) / p10
                         if qty > 0:
                             id_a[col] = 1; price_a[col] = ep; size_a[col] = qty
                             last_act_a[0] = cur_htf
@@ -372,7 +378,7 @@ if 'JIT_ORDER_V5' not in globals():
                 else:  # close 모드 (HTF 종가 시그널)
                     if hl_sig_t[i] > 0 and hl_sig_t[i] != last_act_a[0]:
                         ep = o[i] + slip
-                        qty = np.floor((cash * 0.9992 / cl[i-1]) * p10 + 0.5) / p10
+                        qty = np.floor((cash / cl[i-1]) * p10 + 0.5) / p10
                         if qty > 0:
                             id_a[col] = 1; price_a[col] = ep; size_a[col] = qty
                             last_act_a[0] = hl_sig_t[i]
@@ -384,7 +390,7 @@ if 'JIT_ORDER_V5' not in globals():
                     if l[i] <= llp_cur and cur_htf != last_act_a[1]:
                         ep = min(o[i], llp_cur) # Limit order: no negative slippage
                         if ep <= 0: ep = tick
-                        qty = np.floor((cash * 0.9992 / cl[i-1]) * p10 + 0.5) / p10
+                        qty = np.floor((cash / cl[i-1]) * p10 + 0.5) / p10
                         if qty > 0:
                             id_a[col] = 2; price_a[col] = ep; size_a[col] = qty
                             last_act_a[1] = cur_htf
@@ -393,7 +399,7 @@ if 'JIT_ORDER_V5' not in globals():
                     if ll_sig_t[i] > 0 and ll_sig_t[i] != last_act_a[1]:
                         ep = o[i] + slip # Long entry close: ADD slip
                         if ep <= 0: ep = tick
-                        qty = np.floor((cash * 0.9992 / cl[i-1]) * p10 + 0.5) / p10
+                        qty = np.floor((cash / cl[i-1]) * p10 + 0.5) / p10
                         if qty > 0:
                             id_a[col] = 2; price_a[col] = ep; size_a[col] = qty
                             last_act_a[1] = ll_sig_t[i]
@@ -438,14 +444,11 @@ if 'JIT_ORDER_V5' not in globals():
                 return vbt.portfolio.nb.order_nothing_nb()
 
             # --- 청산 조건 체크 ---
-            is_htf_end = (i == len(cl) - 1) or (htf_id_t[i] != htf_id_t[i+1])
+            is_new_htf_bar = (i > 0) and (htf_id_t[i] != htf_id_t[i-1])
+
             if exit_mode == 0:  # limits 모드: 고가/저가로 체크 (Intra-bar)
                 is_hit = (h[i] >= tpp) or (l[i] <= slp)
-            else:               # close 모드: 종가로 체크 (barstate.isconfirmed)
-                is_hit = is_htf_end and ((cl[i] >= tpp) or (cl[i] <= slp))
-
-            if is_hit:
-                if exit_mode == 0:  # limits
+                if is_hit:
                     # 동일 봉 TP/SL 동시 도달 → 시가와의 거리가 가까운 쪽 우선
                     tp_hit = h[i] >= tpp
                     sl_hit = l[i] <= slp
@@ -461,9 +464,16 @@ if 'JIT_ORDER_V5' not in globals():
                         exit_p = o[i]; is_tp = False
                     if not is_tp:
                         exit_p -= slip
-                else:  # close
-                    is_tp = cl[i] >= tpp
-                    exit_p = cl[i] - slip
+            else:               # close 모드: 종가로 체크 (barstate.isconfirmed)
+                # Pine Script triggers on the next bar's OPEN if the condition was met on the previous bar's CLOSE
+                is_hit = False
+                if is_new_htf_bar:
+                    if (cl[i-1] >= tpp) or (cl[i-1] <= slp):
+                        is_hit = True
+                        is_tp = cl[i-1] >= tpp
+                        exit_p = o[i] - slip
+
+            if is_hit:
 
                 # installment 분할청산 (HL만 적용, Pine: Installment=2이면 절반씩)
                 if cur_state == 1 and inst_num == 2:
@@ -486,6 +496,7 @@ o_l_m  = m_map.get(o_m_ll, 0)
 e_h_m  = m_map.get(e_m_hl, 0)
 e_l_m  = m_map.get(e_m_ll, 0)
 t_m    = t_map.get(tp_hl_type, 1)
+s_m    = t_map.get(sl_hl_type, 1)
 
 # [BUG FIX] 수수료를 글로벌 설정이 아닌 from_order_func에 직접 주입
 # vbt.settings.portfolio['fees']는 from_order_func에 자동 적용되지 않음
@@ -499,7 +510,7 @@ portfolio = vbt.Portfolio.from_order_func(
     inst, tr_hl,
     o_h_m, o_l_m,
     e_h_m, e_l_m,
-    t_m, t_m,
+    t_m, s_m,
     tp_hl_per, sl_hl_per,
     tp_ll_per, sl_ll_per,
     hl_tp_atr_mul, hl_sl_atr_mul,
