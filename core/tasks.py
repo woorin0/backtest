@@ -187,25 +187,27 @@ def run_optuna_worker(self, study_name: str, data_path: str, engine: str, code_s
                     safe_set('Total Trades', res.get('Total Trades', 0))
                     safe_set('Total Profit', res.get('Total Profit', 0.0))
                     
-                    # 🚀 [V7.1] 실시간 고속 진행률 추적을 위한 Redis 카운터 증가
-                    status_redis.incr(f"progress:{study_name}")
-                    status_redis.expire(f"progress:{study_name}", 86400) # 24시간 후 자동 삭제
-                    
                     ret_val = float(res.get("Total Return (%)", 0.0))
                     win_rate = res.get('Win Rate (%)', 0.0)
                     mdd = res.get('MDD (%)', 0.0)
+
+                    # 🚀 [V7.1] 실시간 고속 진행률 추적을 위한 Redis 카운터 증가
+                    pipe = status_redis.pipeline()
+                    pipe.incr(f"progress:{study_name}")
+                    pipe.expire(f"progress:{study_name}", 86400) # 24시간 후 자동 삭제
                     
                     # 🚀 [V7.2] 최고 성능 지표 실시간 독립 캐싱 O(1)
                     best_key = f"best_metrics:{study_name}"
                     current_best = status_redis.hget(best_key, "value")
                     if current_best is None or ret_val > float(current_best):
-                        status_redis.hset(best_key, mapping={
+                        pipe.hset(best_key, mapping={
                             "value": float(ret_val),
                             "win_rate": float(win_rate),
                             "mdd": float(mdd)
                         })
-                        status_redis.expire(best_key, 86400)
+                        pipe.expire(best_key, 86400)
                     
+                    pipe.execute()
                     return ret_val
                 else:
                     # 🚨 에러 디버깅을 위해 로컬 파일에 로그 기록
