@@ -507,6 +507,7 @@ t_m    = t_map.get(tp_hl_type, 1)
 
 # [BUG FIX] 수수료를 글로벌 설정이 아닌 from_order_func에 직접 주입
 # vbt.settings.portfolio['fees']는 from_order_func에 자동 적용되지 않음
+# 주의: from_order_func 자체에 fees=... 키워드 인자를 넘기면 Portfolio.__init__() 오류가 발생하므로 위치 인자(0.0008)로 넘겨 내부 Numba 함수(fee_rate)에서 처리함.
 portfolio = vbt.Portfolio.from_order_func(
     c_np,
     order_func_nb,
