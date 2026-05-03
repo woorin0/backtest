@@ -325,6 +325,10 @@ htf_id_t = align_to_ltf(htf_idx, df_htf, df_ltf)
 if 'prev_results' in globals(): del globals()['prev_results']
 if 'my_state' in globals(): del globals()['my_state']
 
+for _var in ['id_arr', 'price_arr', 'size_arr', 'last_act_a']:
+    if _var in globals():
+        del globals()[_var]
+
 id_arr    = np.zeros(1, dtype=np.int32)
 price_arr = np.zeros(1, dtype=np.float64)
 size_arr  = np.zeros(1, dtype=np.float64)
