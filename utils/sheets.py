@@ -35,16 +35,9 @@ def push_to_google_sheets(report_df, engine: str, symbol: str, timeframe: str):
         # DataFrame → 헤더 + 행 데이터로 변환
         headers = report_df.columns.tolist()
         rows = []
-        for _, row in report_df.iterrows():
-            row_data = []
-            for val in row.tolist():
-                # JSON 직렬화를 위한 타입 변환
-                if hasattr(val, 'item'):  # numpy 타입 처리
-                    val = val.item()
-                if isinstance(val, float) and (val != val):  # NaN 체크
-                    val = 0.0
-                row_data.append(val)
-            rows.append(row_data)
+        # 🚀 [Memory Optimization] fillna(0.0) & tolist() 사용
+        # Pandas 객체를 네이티브 리스트로 한 번에 변환 (JSON 직렬화 최적화 & NaN 방지)
+        rows = report_df.fillna(0.0).values.tolist()
         
         payload = {
             "sheet_name": sheet_name,
