@@ -125,6 +125,8 @@ if active_task:
         fetch_status = status_redis.get(f"data_fetch_status_{sn}")
         st.info(fetch_status if fetch_status else "백그라운드에서 데이터를 준비하고 있습니다...")
         if st.button("❌ 준비 중단"):
+            if "prepare_task_id" in active_task:
+                celery_app.control.revoke(active_task["prepare_task_id"], terminate=True)
             if os.path.exists(CACHE_FILE): os.remove(CACHE_FILE)
             st.rerun()
         time.sleep(2)
@@ -168,9 +170,19 @@ if btn_start:
     # 🚀 [V9.0] 데이터 수집 및 최적화를 백그라운드 태스크 하나로 묶어 발사
     from core.tasks import prepare_mtf_data_task
     
+    # Celery 태스크 발사 (데이터 수집 -> 최적화 -> 집계까지 원스톱)
+    prepare_task = prepare_mtf_data_task.delay(
+        sn, "Binance", sym, tf, ltf,
+        date_start.strftime("%Y-%m-%d"),
+        date_end.strftime("%Y-%m-%d"),
+        st.session_state["strategy_code"],
+        trials, workers, repeat_count, eng
+    )
+
     # 임시 상태 저장 (데이터 수집 중임을 알림)
     active_task_dict = {
         "task_id": "PREPARING", # 데이터 수집 중 상태 표시용 예약어
+        "prepare_task_id": prepare_task.id,
         "worker_ids": [],
         "study_name": sn,
         "n_trials": trials,
@@ -181,15 +193,6 @@ if btn_start:
     
     with open(CACHE_FILE, "w") as f:
         json.dump(active_task_dict, f)
-        
-    # Celery 태스크 발사 (데이터 수집 -> 최적화 -> 집계까지 원스톱)
-    prepare_mtf_data_task.delay(
-        sn, "Binance", sym, tf, ltf, 
-        date_start.strftime("%Y-%m-%d"), 
-        date_end.strftime("%Y-%m-%d"), 
-        st.session_state["strategy_code"], 
-        trials, workers, repeat_count, eng
-    )
     
     st.rerun()
 
@@ -240,10 +243,16 @@ if active_task:
             if not tk.ready():
                 if st.button("⛔ 실시간 백테스트 강제 중단", use_container_width=True, type="secondary"):
                     # 1. 태스크 취소 (Chord + Workers)
+                    if "prepare_task_id" in active_task:
+                        celery_app.control.revoke(active_task["prepare_task_id"], terminate=True)
                     celery_app.control.revoke(active_task.get("task_id"), terminate=True)
                     for wid in active_task.get("worker_ids", []):
                         celery_app.control.revoke(wid, terminate=True)
-                    # 2. 캐시 삭제
+
+                    # 2. Redis를 통한 워커 내부 강제 중단 플래그 설정
+                    status_redis.set(f"cancel:{active_task.get('study_name')}", "1", ex=3600)
+
+                    # 3. 캐시 삭제
                     if os.path.exists(CACHE_FILE): os.remove(CACHE_FILE)
                     st.success("🛰️ 모든 백그라운드 태스크를 강제 종료하고 리소스를 반환했습니다.")
                     time.sleep(1)
@@ -301,9 +310,12 @@ if active_task:
             status_slot.error(f"❌ 작업 결과 처리 중 오류: {str(e)}")
             if st.button("🚨 시스템 강제 초기화 (태스크 포함)", use_container_width=True):
                 if active_task:
+                    if "prepare_task_id" in active_task:
+                        celery_app.control.revoke(active_task["prepare_task_id"], terminate=True)
                     celery_app.control.revoke(active_task.get("task_id"), terminate=True)
                     for wid in active_task.get("worker_ids", []):
                         celery_app.control.revoke(wid, terminate=True)
+                    status_redis.set(f"cancel:{active_task.get('study_name')}", "1", ex=3600)
                 if os.path.exists(CACHE_FILE): os.remove(CACHE_FILE)
                 st.rerun()
 else:
