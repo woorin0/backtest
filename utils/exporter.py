@@ -65,14 +65,18 @@ def create_excel_report(study, data_df):
             'fg_color': '#D7E4BC',
             'border': 1
         })
+
+        # 컬럼별 최대 길이를 한 번에 계산 (Vectorized)
+        if not report_df.empty:
+            # astype(str)을 전체 DF에 한 번만 적용하고, 각 컬럼별 최대 길이를 계산
+            max_lengths = report_df.astype(str).apply(lambda s: s.map(len).max())
+        else:
+            max_lengths = pd.Series(0, index=report_df.columns)
         
         for col_num, value in enumerate(report_df.columns.values):
             worksheet.write(0, col_num, value, header_format)
-            # 빈 데이터프레임일 경우 에러 방지
-            if not report_df.empty:
-                column_len = max(report_df[value].astype(str).map(len).max(), len(value)) + 2
-            else:
-                column_len = len(value) + 2
+            # 계산된 최대 길이와 헤더 길이 중 큰 값 선택
+            column_len = max(max_lengths[value], len(value)) + 2
             worksheet.set_column(col_num, col_num, column_len)
             
     output.seek(0)
