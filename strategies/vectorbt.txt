@@ -325,9 +325,10 @@ htf_id_t = align_to_ltf(htf_idx, df_htf, df_ltf)
 id_arr    = np.zeros(1, dtype=np.int32)
 price_arr = np.zeros(1, dtype=np.float64)
 size_arr  = np.zeros(1, dtype=np.float64)
+inst_qty_a= np.zeros(1, dtype=np.float64)
 last_act_a = np.zeros(3, dtype=np.float64)  # 0: HL entry, 1: LL entry, 2: TR exit
 # 캐시에서 이전 값이 남아있을 경우를 대비해 명시적으로 0으로 덮어쓰기
-id_arr[:] = 0; price_arr[:] = 0.0; size_arr[:] = 0.0; last_act_a[:] = 0.0
+id_arr[:] = 0; price_arr[:] = 0.0; size_arr[:] = 0.0; inst_qty_a[:] = 0.0; last_act_a[:] = 0.0
 
 # =========[ 주문 함수 ]=========
 if 'JIT_ORDER_V5' not in globals():
@@ -345,7 +346,7 @@ if 'JIT_ORDER_V5' not in globals():
                       tpl, sll,
                       tpm, slm,
                       slip_ticks, dec,
-                      id_a, price_a, size_a, last_act_a):
+                      id_a, price_a, size_a, inst_qty_a, last_act_a):
 
         i = ctx.i; col = ctx.col
         if i < 1:
@@ -365,23 +366,30 @@ if 'JIT_ORDER_V5' not in globals():
             llp_cur = llp_t[i]
             cur_htf = htf_id_t[i]
 
+            cash_safe = max(cash, 0.0)
+            cl_now = max(cl[i-1], tick)
+
             # HL 진입
             if not np.isnan(hlp_cur) and hlp_cur > 0:
                 if o_m_h == 0:  # limits (stop order)
                     safe_stop = max(hlp_cur, tick)
                     if h[i] >= safe_stop and cur_htf != last_act_a[0]:
                         ep = max(o[i], safe_stop) + slip
-                        qty = np.floor((cash * 0.9992 / cl[i-1]) * p10 + 0.5) / p10
+                        base_qty = cash_safe * 0.9992 / cl_now
+                        qty = np.floor(base_qty * p10 + 0.5) / p10
                         if qty > 0:
                             id_a[col] = 1; price_a[col] = ep; size_a[col] = qty
+                            inst_qty_a[col] = np.ceil(base_qty / inst_num * p10) / p10
                             last_act_a[0] = cur_htf
                             return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=0, fees=0.0008)
                 else:  # close 모드 (HTF 종가 시그널)
                     if hl_sig_t[i] > 0 and hl_sig_t[i] != last_act_a[0]:
                         ep = o[i] + slip
-                        qty = np.floor((cash * 0.9992 / cl[i-1]) * p10 + 0.5) / p10
+                        base_qty = cash_safe * 0.9992 / cl_now
+                        qty = np.floor(base_qty * p10 + 0.5) / p10
                         if qty > 0:
                             id_a[col] = 1; price_a[col] = ep; size_a[col] = qty
+                            inst_qty_a[col] = np.ceil(base_qty / inst_num * p10) / p10
                             last_act_a[0] = hl_sig_t[i]
                             return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=0, fees=0.0008)
 
@@ -390,7 +398,8 @@ if 'JIT_ORDER_V5' not in globals():
                 if o_m_l == 0:  # limits (Pine: limit)
                     if l[i] <= llp_cur and cur_htf != last_act_a[1] and llp_cur > 0:
                         ep = min(o[i], llp_cur) # Limit order: no negative slippage
-                        qty = np.floor((cash * 0.9992 / cl[i-1]) * p10 + 0.5) / p10
+                        base_qty = cash_safe * 0.9992 / cl_now
+                        qty = np.floor(base_qty * p10 + 0.5) / p10
                         if qty > 0:
                             id_a[col] = 2; price_a[col] = ep; size_a[col] = qty
                             last_act_a[1] = cur_htf
@@ -399,7 +408,8 @@ if 'JIT_ORDER_V5' not in globals():
                     if ll_sig_t[i] > 0 and ll_sig_t[i] != last_act_a[1]:
                         ep = o[i] + slip # Long entry close: ADD slip
                         if ep <= 0: ep = tick
-                        qty = np.floor((cash * 0.9992 / cl[i-1]) * p10 + 0.5) / p10
+                        base_qty = cash_safe * 0.9992 / cl_now
+                        qty = np.floor(base_qty * p10 + 0.5) / p10
                         if qty > 0:
                             id_a[col] = 2; price_a[col] = ep; size_a[col] = qty
                             last_act_a[1] = ll_sig_t[i]
@@ -415,6 +425,7 @@ if 'JIT_ORDER_V5' not in globals():
                 if tr_sig_t[i] > 0 and tr_sig_t[i] != last_act_a[2]:
                     exit_p = o[i] - slip
                     last_act_a[2] = tr_sig_t[i]
+                    inst_qty_a[col] = 0.0
                     return vbt.portfolio.nb.order_nb(size=-pos, price=exit_p, size_type=0, fees=0.0008)
 
             # --- TP / SL 계산 ---
@@ -488,13 +499,17 @@ if 'JIT_ORDER_V5' not in globals():
 
             if is_hit:
 
-                # installment 분할청산 (HL만 적용, Pine: Installment=2이면 절반씩)
-                if cur_state == 1 and inst_num == 2:
-                    half = np.ceil((size_a[col] / 2.0) * p10) / p10
-                    if pos > half:
-                        return vbt.portfolio.nb.order_nb(size=-half, price=exit_p, size_type=0, fees=0.0008)
+                # installment 분할청산 (HL만 적용, Pine: hl_entry_installment_qty)
+                exit_qty = pos
+                if cur_state == 1:
+                    inst_qty = inst_qty_a[col]
+                    if inst_qty > 0:
+                        exit_qty = min(inst_qty, pos)
 
-                return vbt.portfolio.nb.order_nb(size=-pos, price=exit_p, size_type=0, fees=0.0008)
+                    if pos <= exit_qty:
+                        inst_qty_a[col] = 0.0
+
+                return vbt.portfolio.nb.order_nb(size=-exit_qty, price=exit_p, size_type=0, fees=0.0008)
 
         return vbt.portfolio.nb.order_nothing_nb()
 
@@ -528,7 +543,7 @@ portfolio = vbt.Portfolio.from_order_func(
     tp_ll_per, sl_ll_per,
     hl_tp_atr_mul, hl_sl_atr_mul,
     slippage_ticks, ex_dec,
-    id_arr, price_arr, size_arr, last_act_a,
+    id_arr, price_arr, size_arr, inst_qty_a, last_act_a,
     init_cash=400.0,
     freq='1m'
 )
