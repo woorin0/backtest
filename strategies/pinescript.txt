@@ -158,7 +158,7 @@ HLPlot = float(na)
 hott_val = HOTT
 if High_Int > 0 and bar_index > High_Int
     hott_val := HOTT[High_Int]
-hott_plot = nz(hott_val) 
+hott_plot = nz(hott_val)
 
 if HLPrice == 'BB'
     HLPlot := lbbUpper
@@ -166,7 +166,7 @@ else if HLPrice == 'H/L OTT'
     HLPlot := hott_plot
 else if HLPrice == 'MAX'
     HLPlot := math.max(hott_plot, lbbUpper)
-    
+
 BasisPlot1 = lbbMiddle
 plot(HLPlot, 'Upper', color = color.new(color.green, 0))
 plot(BasisPlot1, 'Basis_HL', color = color.new(color.yellow, 0))

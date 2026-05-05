@@ -1,5 +1,6 @@
 import os
 import time
+from typing import TypedDict
 import pandas as pd
 from celery import Celery
 import optuna
@@ -13,6 +14,15 @@ import json
 import subprocess
 import sys
 import traceback
+
+class WorkerConfig(TypedDict):
+    study_name: str
+    data_path: str
+    engine: str
+    code_str: str
+    n_trials: int
+    symbol: str
+    total_trials: int
 
 # [자가 치유] 필수 모듈 xlsxwriter 부재 시 자동 설치
 try:
@@ -116,7 +126,16 @@ def prepare_mtf_data_task(self, study_name: str, exchange: str, symbol: str, htf
         worker_ids = []
         for _ in range(workers):
             w_id = uuid()
-            sig = run_optuna_worker.s(study_name, data_path, engine, code_str, trials//workers, symbol, trials)
+            config = WorkerConfig(
+                study_name=study_name,
+                data_path=data_path,
+                engine=engine,
+                code_str=code_str,
+                n_trials=trials // workers,
+                symbol=symbol,
+                total_trials=trials
+            )
+            sig = run_optuna_worker.s(config)
             sig.set(task_id=w_id)
             worker_sigs.append(sig)
             worker_ids.append(w_id)
@@ -153,10 +172,18 @@ def prepare_mtf_data_task(self, study_name: str, exchange: str, symbol: str, htf
         return {"status": "FAILED", "error": err_msg}
 
 @celery_app.task(bind=True)
-def run_optuna_worker(self, study_name: str, data_path: str, engine: str, code_str: str, n_trials: int, symbol: str, total_trials: int):
+def run_optuna_worker(self, config: WorkerConfig):
     worker_id = self.request.id
     error_notified = False
     
+    study_name = config['study_name']
+    data_path = config['data_path']
+    engine = config['engine']
+    code_str = config['code_str']
+    n_trials = config['n_trials']
+    symbol = config['symbol']
+    total_trials = config['total_trials']
+
     try:
         data = pd.read_pickle(data_path)
         study = get_study(study_name)
@@ -191,7 +218,7 @@ def run_optuna_worker(self, study_name: str, data_path: str, engine: str, code_s
                     # 🚀 [V7.1] 실시간 고속 진행률 추적을 위한 Redis 카운터 증가
                     status_redis.incr(f"progress:{study_name}")
                     status_redis.expire(f"progress:{study_name}", 86400) # 24시간 후 자동 삭제
-                    
+
                     ret_val = float(res.get("Total Return (%)", 0.0))
                     win_rate = res.get('Win Rate (%)', 0.0)
                     mdd = res.get('MDD (%)', 0.0)
@@ -292,7 +319,16 @@ def finalize_optuna_study(self, worker_results, study_name: str, data_path: str,
                 w_cnt = params.get("workers", 4)
                 for _ in range(w_cnt):
                     w_id = uuid()
-                    sig = run_optuna_worker.s(next_sn, params["dp"], params["eng"], params["code"], params["trials"]//w_cnt, params["sym"], params["trials"])
+                    config = WorkerConfig(
+                        study_name=next_sn,
+                        data_path=params["dp"],
+                        engine=params["eng"],
+                        code_str=params["code"],
+                        n_trials=params["trials"] // w_cnt,
+                        symbol=params["sym"],
+                        total_trials=params["trials"]
+                    )
+                    sig = run_optuna_worker.s(config)
                     sig.set(task_id=w_id)
                     worker_sigs.append(sig)
                     worker_ids.append(w_id)

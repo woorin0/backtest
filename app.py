@@ -25,10 +25,15 @@ if "logged_in" not in st.session_state:
     st.session_state["logged_in"] = False
 
 if not st.session_state["logged_in"]:
+    app_password = os.getenv("APP_PASSWORD")
+    if not app_password:
+        st.error("⚠️ 시스템 설정 오류: 'APP_PASSWORD' 환경 변수가 설정되지 않았습니다. 보안을 위해 서비스를 중단합니다.")
+        st.stop()
+
     st.markdown("<h1 style='text-align: center;'>🔐 시스템 보안 인증</h1>", unsafe_allow_html=True)
     pwd = st.text_input("액세스 키", type="password")
     if st.button("인증"):
-        if pwd == os.getenv("APP_PASSWORD", "jumbonuts"):
+        if pwd == app_password:
             st.session_state["logged_in"] = True
             st.rerun()
     st.stop()
@@ -221,11 +226,15 @@ if active_task:
             draw_m(p_m3, "최저 MDD", f"{best_mdd:.2f}%", "#FF3B30")
             draw_m(p_m4, "완료된 탐색", f"{compl} 회", "#5856D6")
             
-            # 워커 상세 진단
+            # 워커 상세 진단 (Redis MGET을 통한 N+1 문제 해결)
             diag_text = ""
-            for wid in active_task.get("worker_ids", []):
-                stat = status_redis.get(f"worker_status_{wid}") or "⏳ 대기 중"
-                diag_text += f"- **워커 {wid[:6]}**: {stat}\n"
+            worker_ids = active_task.get("worker_ids", [])
+            if worker_ids:
+                keys = [f"worker_status_{wid}" for wid in worker_ids]
+                stats = status_redis.mget(keys)
+                for wid, stat in zip(worker_ids, stats):
+                    stat = stat or "⏳ 대기 중"
+                    diag_text += f"- **워커 {wid[:6]}**: {stat}\n"
             diag_slot.markdown(diag_text)
             
             if not tk.ready():
