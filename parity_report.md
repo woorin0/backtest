@@ -4,25 +4,29 @@ This report outlines the structural differences examined between `strategies/pin
 
 ## 1. Indicators and Mathematical Computation
 * **Moving Averages (MAs) and Initial Values:**
-  In Pine Script, `ta.rma` uses an exponential calculation but initially seeds the first valid value using an SMA over the defined period. The `n_rma` JIT function and the `calc_atr_pine_nb` function in the vectorbt implementation faithfully replicate this logic, iterating via an SMA counter until `length` is reached, then switching to standard RMA smoothing.
+  In Pine Script, `ta.rma` uses an exponential calculation but initially seeds the first valid value using an SMA over the defined period. I verified that the `n_rma` JIT function faithfully replicates this logic by maintaining a `count` variable and triggering an SMA assignment (`last_val = sum_val / l; res[i] = last_val`) when `count == l`, before falling back to the standard RMA formula (`res[i] = alpha * s[i] + (1.0 - alpha) * last_val`) for all subsequent iterations. This perfectly matches Pine Script's initialization behavior.
 * **True Range and ATR (`ta.atr`):**
-  Pine Script evaluates the True Range for `bar_index == 0` simply as `high - low`. To guarantee parity, `calc_atr_pine_nb` was confirmed to appropriately initialize `tr[0] = h[0] - l[0]`, preventing subsequent RMA offsets.
+  Pine Script evaluates the True Range for `bar_index == 0` simply as `high - low`. To guarantee parity, `calc_atr_pine_nb` was confirmed to appropriately initialize `tr[0] = h[0] - l[0]`, preventing subsequent RMA offsets. I have confirmed this logic is correctly implemented in `vectorbt.txt`.
 * **Standard Deviation (`ta.stdev` vs `pandas.std`):**
-  Pine Script uses a population standard deviation. The code natively applies `.std(ddof=0)` in pandas, which ensures the Bollinger Band standard deviations perfectly match Pine Script's unadjusted variance over the lookback window.
+  Pine Script uses a population standard deviation. I verified that the vectorbt code natively applies `.std(ddof=0)` on the Pandas rolling window (`bb_std = df_htf['Close'].rolling(bb_len).std(ddof=0).values`), which ensures the Bollinger Band standard deviations perfectly match Pine Script's unadjusted variance over the lookback window.
+* **max (최고가):**
+  Pine Script's `ta.highest` evaluates the maximum value including the current bar. I confirmed that the vectorbt code correctly utilizes `pd.Series.rolling(window).max()`, which by definition includes the current index in Pandas, thus maintaining strict window parity.
 * **HOTT (Highest/Lowest Trailing Stop):**
-  Pine Script evaluates the HOTT condition at the close of every bar. The state machine in `calc_hott_nb` accurately maps the conditional fallback assignment inside the `else` case (`longStop` assigned the raw `MAvg-fark` instead of maintaining `longStopPrev`) mirroring exactly how Pine Script updates its trailing bounds dynamically.
+  Pine Script evaluates the HOTT condition at the close of every bar. The state machine in `calc_hott_nb` accurately maps the conditional fallback assignment inside the `else` case (`longStop` assigned the raw `MAvg-fark` instead of maintaining `longStopPrev`) mirroring exactly how Pine Script updates its trailing bounds dynamically. No Look-ahead bias exists.
 
 ## 2. Signal Shifting and Look-Ahead Bias Mitigation
-* **Multi-Timeframe / Signal Alignment:**
-  Because Vectorbt operates inherently differently than Pine Script’s bar-close execution sequence, signals derived from Higher Time Frame (HTF) data must be strictly shifted using `pd.Series(arr_htf).shift(1)` before applying `ffill` forward-fill reindexing to the LTF DataFrame. This entirely prevents look-ahead bias, ensuring the vectorbt arrays strictly evaluate the target entry limits/conditions only *after* the signal's originating bar has definitively closed.
+* **Multi-Timeframe / Signal Alignment ('limits close' option):**
+  Because Vectorbt operates inherently differently than Pine Script’s bar-close execution sequence, signals derived from Higher Time Frame (HTF) data must be strictly shifted using `pd.Series(arr_htf).shift(1)` before applying `ffill` forward-fill reindexing to the LTF DataFrame. This entirely prevents look-ahead bias, ensuring the vectorbt arrays strictly evaluate the target entry limits/conditions only *after* the signal's originating bar has definitively closed, perfectly emulating Pine's `barstate.isconfirmed` and `close` execution timings.
 
 ## 3. Order Types and Position Execution Logic
 * **Safe Limitations for Precision & `syminfo.mintick`:**
   Pine Script uses `syminfo.mintick` in zero-fallback situations (e.g., `nz(syminfo.mintick, 0.000001)`). In the python side, the static `0.0001` hardcoding was refactored to dynamically calculate `safe_epsilon = 1.0 / (10 ** ex_dec)` natively bridging Pine Script’s dynamic precision sizing into `safe_close`.
 * **Position Size Formula Parity (`safeClose_now`):**
-  Position size calculations inside the JIT function (`order_func_nb`) were modified to use `safe_cl = max(cl[i-1], tick)` to natively replicate Pine Script's `math.max(nz(close), safe_epsilon)`. This ensures identical position quantifications avoiding size offsets or internal zero-division crashes.
-* **Dual Exit Limit Orders:**
-  For partial take-profits, the gap processing handles immediate breach behavior accurately (filling the gap exactly at the `o[i]` open price if the price overshot the target TP/SL level on the new tick), simulating Pine Script’s bracket fill logic natively inside the `order_func_nb`.
+  Position size calculations inside the JIT function (`order_func_nb`) were modified to use `safe_cl = max(cl[i-1], tick)` and updated with `np.nan_to_num(cl[i-1], nan=0.0)` for exact `nz(close)` parity to natively replicate Pine Script's `math.max(nz(close), safe_epsilon)`. The VectorBT sizing logic handles fee deductions while `base_qty_pine` independently tracks the unadjusted equity sizing for pure fraction-based installment closing.
+* **Dual Exit Limit Orders and Slippage Execution:**
+  For partial take-profits, the gap processing handles immediate breach behavior accurately (filling the gap exactly at the `o[i]` open price if the price overshot the target TP/SL level on the new tick), simulating Pine Script’s bracket fill logic natively inside the `order_func_nb`. Additionally, Gap fills for exit limits were explicitly modified to assign slippage properly to Stop Loss gaps (`o[i] - slip`) whereas Take Profit levels natively process at the exact jump line (`o[i]`). Limit entries also explicitly receive `+ slip` to match Pine Script's emulator slippage behavior perfectly.
+* **Fraction-based Partial Closing (분할매도):**
+  Partial exits are statically fixed to `inst_qty_a` during entry. This size strictly calculates `safeCapital / safeClose_now` matching Pine Script exactly without re-evaluating fluctuating exit prices, perfectly emulating `hl_entry_installment_qty`.
 
 ## 4. State Management (Optuna Hyperparameter Safety)
 * **Global Numba Cache Re-initializations:**
