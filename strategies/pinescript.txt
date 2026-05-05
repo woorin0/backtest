@@ -4,7 +4,7 @@
 import dokang/POA/17
 
 //@version=6
-strategy('Dual Long', overlay = true, default_qty_type = strategy.percent_of_equity, default_qty_value = 100, initial_capital = 400, pyramiding = 0, commission_value = 0.08, slippage = 3, use_bar_magnifier = true, margin_long = 0, margin_short = 0)
+strategy('Dual Long(간소화)', overlay = true, default_qty_type = strategy.percent_of_equity, default_qty_value = 100, initial_capital = 400, pyramiding = 0, commission_value = 0.08, slippage = 3, use_bar_magnifier = true, margin_long = 0, margin_short = 0)
 
 // =========[ 공용 헬퍼 ]=========
 safe_epsilon = nz(syminfo.mintick, 0.000001)
@@ -113,53 +113,6 @@ HL_SL_AtrMul  = input.float(defval = 4.0, title = 'HL SL Multiplier ', minval = 
 hasOpenTrade   = strategy.opentrades > 0
 lastEntryPrice = hasOpenTrade ? strategy.opentrades.entry_price(strategy.opentrades - 1) : na
 
-// =========[ TP/SL 계산 ]=========
-// Use pending limit/stop prices for TP/SL to handle strategy.exit attached to pending orders
-HLPlot_safe = not na(HLPlot) and HLPlot > 0 ? safeStop(HLPlot) : na
-LLPlot_safe = not na(LLPlot) and LLPlot > 0 ? safeLimit(LLPlot) : na
-
-basePriceHL = hasOpenTrade ? lastEntryPrice : (OpenAtHL == 'limits' ? HLPlot_safe : na)
-basePriceLL = hasOpenTrade ? lastEntryPrice : (OpenAtLL == 'limits' ? LLPlot_safe : na)
-
-TP_Plot = float(na)
-if not na(basePriceHL)
-    if HL_TP_Price == 'Fixed'
-        TP_Plot := basePriceHL * (1 + TP_HL_f)
-    if HL_TP_Price == 'ATR'
-        TP_Plot := basePriceHL + longTakeProfitAtrMul * openAtr
-    if HL_TP_Price == 'both'
-        TP_Plot := math.max(basePriceHL * (1 + TP_HL_f), basePriceHL + longTakeProfitAtrMul * openAtr)
-
-TP_Plot1 = float(na)
-if not na(basePriceLL)
-    TP_Plot1 := basePriceLL * (1 + TP_LL_f)
-
-Stop_HL_Price = float(na)
-if not na(basePriceHL)
-    if HL_SL_Price == 'Fixed'
-        Stop_HL_Price := basePriceHL * (1 - SL_HL_f)
-    if HL_SL_Price == 'ATR'
-        Stop_HL_Price := basePriceHL - HL_SL_AtrMul * HL_SL_openAtr
-    if HL_SL_Price == 'both'
-        Stop_HL_Price := math.max(basePriceHL * (1 - SL_HL_f), basePriceHL - HL_SL_AtrMul * HL_SL_openAtr)
-
-Stop_LL_Price = float(na)
-if not na(basePriceLL)
-    Stop_LL_Price := basePriceLL * (1 - SL_LL_f)
-
-TP_HL = not na(TP_Plot) and TP_Plot <= close
-SL_HL = not na(Stop_HL_Price) and Stop_HL_Price >= close
-TP_LL = not na(TP_Plot1) and TP_Plot1 <= close
-SL_LL = not na(Stop_LL_Price) and Stop_LL_Price >= close
-
-// =========[ TR MA ]=========
-TR_ma_type   = input.string('EMA', 'TR MA', inline = 'TR ma', options = ['SMA', 'EMA', 'SMMA (RMA)', 'WMA', 'VWMA'], group = 'TR')
-TR_ma_source = close // '종가'로 고정
-TR_ma_length = input.int(100, '', inline = 'TR ma', minval = 1, group = 'TR')
-TR_ma = ma(TR_ma_source, TR_ma_length, TR_ma_type)
-closeLongPosition = ta.crossunder(close, TR_ma)
-plot(TR_ma, 'TR ma', color = color.red)
-
 // =========[ Plot Lines ]=========
 HLPlot = float(na)
 hott_val = HOTT
@@ -180,6 +133,52 @@ plot(BasisPlot1, 'Basis_HL', color = color.new(color.yellow, 0))
 
 LL_volat_cond = LL_VolatilityFilter ? ma2 * (1 - ma1 * LLmult - Entry_LL) : ma2 * (1 - Entry_LL)
 LLPlot = LL_volat_cond
+
+// =========[ TP/SL 계산 ]=========
+// 기준 가격: 포지션이 있으면 진입가, 없으면 예정된 진입가(HLPlot/LLPlot)
+calcPrice_HL = not na(lastEntryPrice) ? lastEntryPrice : HLPlot
+calcPrice_LL = not na(lastEntryPrice) ? lastEntryPrice : LLPlot
+
+TP_Plot = float(na)
+if not na(calcPrice_HL)
+    if HL_TP_Price == 'Fixed'
+        TP_Plot := calcPrice_HL * (1 + TP_HL_f)
+    if HL_TP_Price == 'ATR'
+        TP_Plot := calcPrice_HL + longTakeProfitAtrMul * openAtr
+    if HL_TP_Price == 'both'
+        TP_Plot := math.max(calcPrice_HL * (1 + TP_HL_f), calcPrice_HL + longTakeProfitAtrMul * openAtr)
+
+TP_Plot1 = float(na)
+if not na(calcPrice_LL)
+    TP_Plot1 := calcPrice_LL * (1 + TP_LL_f)
+
+Stop_HL_Price = float(na)
+if not na(calcPrice_HL)
+    if HL_SL_Price == 'Fixed'
+        Stop_HL_Price := calcPrice_HL * (1 - SL_HL_f)
+    if HL_SL_Price == 'ATR'
+        Stop_HL_Price := calcPrice_HL - HL_SL_AtrMul * HL_SL_openAtr
+    if HL_SL_Price == 'both'
+        Stop_HL_Price := math.max(calcPrice_HL * (1 - SL_HL_f), calcPrice_HL - HL_SL_AtrMul * HL_SL_openAtr)
+
+Stop_LL_Price = float(na)
+if not na(calcPrice_LL)
+    Stop_LL_Price := calcPrice_LL * (1 - SL_LL_f)
+
+TP_HL = not na(TP_Plot) and TP_Plot <= close
+SL_HL = not na(Stop_HL_Price) and Stop_HL_Price >= close
+TP_LL = not na(TP_Plot1) and TP_Plot1 <= close
+SL_LL = not na(Stop_LL_Price) and Stop_LL_Price >= close
+
+// =========[ TR MA ]=========
+TR_ma_type   = input.string('EMA', 'TR MA', inline = 'TR ma', options = ['SMA', 'EMA', 'SMMA (RMA)', 'WMA', 'VWMA'], group = 'TR')
+TR_ma_source = close // '종가'로 고정
+TR_ma_length = input.int(100, '', inline = 'TR ma', minval = 1, group = 'TR')
+TR_ma = ma(TR_ma_source, TR_ma_length, TR_ma_type)
+closeLongPosition = ta.crossunder(close, TR_ma)
+plot(TR_ma, 'TR ma', color = color.red)
+
+
 
 BasisPlot2 = ma2
 
@@ -251,24 +250,27 @@ if ExitAtLL == 'close' and barstate.isconfirmed and strategy.position_size > 0 a
     strategy.close('LL', comment = 'Close_LL', alert_message = POA.close_message(''))
 
 // —— TP/SL 동시 지정 (limits 모드)
-if ExitAtHL == 'limits'
+if ExitAtHL == 'limits' and strategy.position_size > 0
     _tp = safeLimit(TP_Plot)
     _sl = safeStop(Stop_HL_Price)
     tp_ok = not na(_tp)
     sl_ok = not na(_sl)
     if tp_ok or sl_ok
-        HL_qty = na(hl_entry_installment_qty) ? strategy.position_size : hl_entry_installment_qty
-        HL_qty := math.min(HL_qty, math.abs(strategy.position_size))
-        if f_hasQty(HL_qty)
-            strategy.exit('Exit HL', 'HL', qty = HL_qty, limit = tp_ok ? _tp : na, stop = sl_ok ? _sl : na, alert_message = POA.exit_message(''))
+        // 포지션이 0일 때는 진입 예약 수량을 참조하도록 개선
+        fallback_qty = na(hl_entry_installment_qty) ? qty_hl : hl_entry_installment_qty
+        HL_qty = strategy.position_size > 0 ? math.min(fallback_qty, math.abs(strategy.position_size)) : fallback_qty
+        // Installment가 1이면 qty를 지정하지 않아(na) 전량 청산 유도 (먼지 방지)
+        final_qty = (Installment == 1) ? na : (f_hasQty(HL_qty) ? HL_qty : na)
+        strategy.exit('Exit HL', 'HL', qty = final_qty, limit = tp_ok ? _tp : na, stop = sl_ok ? _sl : na, alert_message = POA.exit_message(''))
 
-if ExitAtLL == 'limits'
+if ExitAtLL == 'limits' and strategy.position_size > 0
     _tp1 = safeLimit(TP_Plot1)
     _sl1 = safeStop(Stop_LL_Price)
     tp_ok1 = not na(_tp1)
     sl_ok1 = not na(_sl1)
     if tp_ok1 or sl_ok1
-        strategy.exit('Exit LL', 'LL', limit = tp_ok1 ? _tp1 : na, stop = sl_ok1 ? _sl1 : na, alert_message = POA.exit_message(''))
+        // LL은 전량 청산이 기본이므로 qty=na 적용
+        strategy.exit('Exit LL', 'LL', qty = na, limit = tp_ok1 ? _tp1 : na, stop = sl_ok1 ? _sl1 : na, alert_message = POA.exit_message(''))
 
 // —— TR 조건 즉시 청산
 if TR_HL == 'On' and closeLongPosition and strategy.position_size > 0 and barstate.isconfirmed
