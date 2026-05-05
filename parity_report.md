@@ -29,3 +29,11 @@ This report outlines the structural differences examined between `strategies/pin
   Because the Optuna trial optimization loops run consecutively, statically assigning `np.zeros(1)` across the global context leads to state pollution and incorrect memory pointers for `@njit` processing. The initializations for `id_arr`, `price_arr`, `size_arr`, and `last_act_a` were explicitly refactored to gracefully read existing `globals()` arrays and overwrite them in-place (e.g., `id_arr[:] = 0`). This rigorously satisfies memory isolation per run while maintaining ultra-fast Numba array linkage.
 
 By applying these exact translations, both the strategy structural mechanics and dynamic entry/exit mathematical boundaries perfectly mirror their Pine Script counterparts under all edge cases.
+
+## 5. Updates on State Array Caching and NaN Propagation (Refactoring Phase 2)
+* **Strict Numba Global Array Re-usage:**
+  To guarantee complete immunity against Optuna trial pointer overlap, the state array assignments (`id_arr`, `price_arr`, `size_arr`, `inst_qty_a`, `last_act_a`) were updated to explicitly check `if 'id_arr' not in globals()`. If they exist, the references are retrieved and correctly zeroed out in-place (`id_arr[:] = 0`), instead of redefining the structure, strictly preventing state pollution or `numba` cache pointer breaking.
+* **Exact `nz()` behavior replication for ATR and HOTT:**
+  Pine Script evaluates `nz(ta.atr())` as strictly `0.0` for missing values, not `na`. This logic was bridged by wrapping `np.nan_to_num(..., nan=0.0)` around the VectorBT outputs for `atr_tp_arr`, `atr_sl_arr`, and `hott_s`.
+* **Exact `math.max()` fallback parsing:**
+  Pine Script `math.max()` evaluates to `na` if any single argument evaluates to `na`. Standard `np.fmax()` ignores NaNs (returning the valid side). To match this logic verbatim, the fallback mechanism in the VectorBT `hl_p` variable was updated to utilize `np.maximum`, which correctly propagates the NaN to block invalid limit orders.
