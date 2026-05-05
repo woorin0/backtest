@@ -278,7 +278,8 @@ elif hl_price_type == 'H/L OTT': hl_p = hott_s.copy()
 else: hl_p = np.fmax(hott_s, bb_u)
 
 # --- LL 트리거 가격 ---
-safe_close = np.where(c_np_htf == 0, 0.0001, c_np_htf)
+safe_epsilon = 1.0 / (10 ** ex_dec)
+safe_close = np.maximum(c_np_htf, safe_epsilon)
 hl_ratio   = (h_np_htf - l_np_htf) / safe_close
 ma1_arr    = n_sma(hl_ratio, ma1_len)
 
@@ -322,10 +323,17 @@ htf_id_t = align_to_ltf(htf_idx, df_htf, df_ltf)
 
 # =========[ 상태 배열 (매 Trial마다 반드시 새로 초기화) ]=========
 # [BUG FIX] globals() 캐싱으로 인한 이전 Trial 상태 오염 방지
-id_arr    = np.zeros(1, dtype=np.int32)
-price_arr = np.zeros(1, dtype=np.float64)
-size_arr  = np.zeros(1, dtype=np.float64)
-last_act_a = np.zeros(3, dtype=np.float64)  # 0: HL entry, 1: LL entry, 2: TR exit
+if 'id_arr' not in globals():
+    id_arr    = np.zeros(1, dtype=np.int32)
+    price_arr = np.zeros(1, dtype=np.float64)
+    size_arr  = np.zeros(1, dtype=np.float64)
+    last_act_a = np.zeros(3, dtype=np.float64)
+else:
+    id_arr = globals()['id_arr']
+    price_arr = globals()['price_arr']
+    size_arr = globals()['size_arr']
+    last_act_a = globals()['last_act_a']
+
 # 캐시에서 이전 값이 남아있을 경우를 대비해 명시적으로 0으로 덮어쓰기
 id_arr[:] = 0; price_arr[:] = 0.0; size_arr[:] = 0.0; last_act_a[:] = 0.0
 
@@ -371,7 +379,8 @@ if 'JIT_ORDER_V5' not in globals():
                     safe_stop = max(hlp_cur, tick)
                     if h[i] >= safe_stop and cur_htf != last_act_a[0]:
                         ep = max(o[i], safe_stop) + slip
-                        qty = np.floor((cash * 0.9992 / cl[i-1]) * p10 + 0.5) / p10
+                        safe_cl = max(cl[i-1], tick)
+                        qty = np.floor((cash * 0.9992 / safe_cl) * p10 + 0.5) / p10
                         if qty > 0:
                             id_a[col] = 1; price_a[col] = ep; size_a[col] = qty
                             last_act_a[0] = cur_htf
@@ -379,7 +388,8 @@ if 'JIT_ORDER_V5' not in globals():
                 else:  # close 모드 (HTF 종가 시그널)
                     if hl_sig_t[i] > 0 and hl_sig_t[i] != last_act_a[0]:
                         ep = o[i] + slip
-                        qty = np.floor((cash * 0.9992 / cl[i-1]) * p10 + 0.5) / p10
+                        safe_cl = max(cl[i-1], tick)
+                        qty = np.floor((cash * 0.9992 / safe_cl) * p10 + 0.5) / p10
                         if qty > 0:
                             id_a[col] = 1; price_a[col] = ep; size_a[col] = qty
                             last_act_a[0] = hl_sig_t[i]
@@ -390,7 +400,8 @@ if 'JIT_ORDER_V5' not in globals():
                 if o_m_l == 0:  # limits (Pine: limit)
                     if l[i] <= llp_cur and cur_htf != last_act_a[1] and llp_cur > 0:
                         ep = min(o[i], llp_cur) # Limit order: no negative slippage
-                        qty = np.floor((cash * 0.9992 / cl[i-1]) * p10 + 0.5) / p10
+                        safe_cl = max(cl[i-1], tick)
+                        qty = np.floor((cash * 0.9992 / safe_cl) * p10 + 0.5) / p10
                         if qty > 0:
                             id_a[col] = 2; price_a[col] = ep; size_a[col] = qty
                             last_act_a[1] = cur_htf
@@ -399,7 +410,8 @@ if 'JIT_ORDER_V5' not in globals():
                     if ll_sig_t[i] > 0 and ll_sig_t[i] != last_act_a[1]:
                         ep = o[i] + slip # Long entry close: ADD slip
                         if ep <= 0: ep = tick
-                        qty = np.floor((cash * 0.9992 / cl[i-1]) * p10 + 0.5) / p10
+                        safe_cl = max(cl[i-1], tick)
+                        qty = np.floor((cash * 0.9992 / safe_cl) * p10 + 0.5) / p10
                         if qty > 0:
                             id_a[col] = 2; price_a[col] = ep; size_a[col] = qty
                             last_act_a[1] = ll_sig_t[i]
