@@ -302,7 +302,7 @@ ll_close_sig = np.where(c_np_htf < ll_p, htf_idx, 0)
 
 tr_prev = pd.Series(tr_ma_arr).shift(1).values
 cl_prev = pd.Series(c_np_htf).shift(1).values
-tr_exit_sig = np.where(c_np_htf < tr_ma_arr, htf_idx, 0)
+tr_exit_sig = np.where((cl_prev >= tr_prev) & (c_np_htf < tr_ma_arr), htf_idx, 0)
 
 def align_to_ltf(arr_htf, df_h, df_l):
     # HTF 마감 시점의 지표/신호는 '다음 HTF 캔들' 구간 내내 사용되어야 하므로 shift(1)
