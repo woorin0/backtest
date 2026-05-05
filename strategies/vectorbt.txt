@@ -268,9 +268,8 @@ mavg_h_pre = h_src_ser.rolling(hott_h_len).max()
 mavg_h_np  = calc_ma(mavg_h_pre, vol_htf, hott_len, hott_ma_type)
 hott_raw   = calc_hott_nb(mavg_h_np, hott_per)
 
-hott_s = np.full(len(c_np_htf), np.nan)
-if h_int > 0: hott_s[h_int:] = hott_raw[:-h_int]
-else:         hott_s = hott_raw.copy()
+hott_s = hott_raw.copy()
+if h_int > 0: hott_s[h_int+1:] = hott_raw[1:-h_int]
 
 # Pine Script `hott_plot = nz(hott_val)` 완벽 재현
 hott_s = np.nan_to_num(hott_s, nan=0.0)
