@@ -302,7 +302,7 @@ ll_close_sig = np.where(c_np_htf < ll_p, htf_idx, 0)
 
 tr_prev = pd.Series(tr_ma_arr).shift(1).values
 cl_prev = pd.Series(c_np_htf).shift(1).values
-tr_exit_sig = np.where((c_np_htf < tr_ma_arr) & (cl_prev >= tr_prev), htf_idx, 0)
+tr_exit_sig = np.where(c_np_htf < tr_ma_arr, htf_idx, 0)
 
 def align_to_ltf(arr_htf, df_h, df_l):
     # HTF 마감 시점의 지표/신호는 '다음 HTF 캔들' 구간 내내 사용되어야 하므로 shift(1)
@@ -368,8 +368,8 @@ if 'JIT_ORDER_V5' not in globals():
             # HL 진입
             if not np.isnan(hlp_cur) and hlp_cur > 0:
                 if o_m_h == 0:  # limits (stop order)
-                    if h[i] >= hlp_cur and cur_htf != last_act_a[0]:
-                        safe_stop = max(hlp_cur, tick)
+                    safe_stop = max(hlp_cur, tick)
+                    if h[i] >= safe_stop and cur_htf != last_act_a[0]:
                         ep = max(o[i], safe_stop) + slip
                         qty = np.floor((cash * 0.9992 / cl[i-1]) * p10 + 0.5) / p10
                         if qty > 0:
@@ -438,12 +438,14 @@ if 'JIT_ORDER_V5' not in globals():
                     if np.isnan(sf): slp = sa
                     elif np.isnan(sa): slp = sf
                     else: slp = max(sf, sa)
+                if not np.isnan(slp): slp = max(slp, tick)
 
                 exit_mode = e_m_h
 
             else:  # LL 포지션
                 tpp = ep * (1.0 + tpl)
                 slp = ep * (1.0 - sll)
+                if not np.isnan(slp): slp = max(slp, tick)
                 exit_mode = e_m_l
 
             # nan 처리 (Pine Script의 na)
