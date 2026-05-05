@@ -322,13 +322,21 @@ tr_sig_t = align_to_ltf(tr_exit_sig, df_htf, df_ltf)
 htf_id_t = align_to_ltf(htf_idx, df_htf, df_ltf)
 
 # =========[ 상태 배열 (매 Trial마다 반드시 새로 초기화) ]=========
-# [BUG FIX] globals() 캐싱으로 인한 이전 Trial 상태 오염 방지
-id_arr    = np.zeros(1, dtype=np.int32)
-price_arr = np.zeros(1, dtype=np.float64)
-size_arr  = np.zeros(1, dtype=np.float64)
-inst_qty_a= np.zeros(1, dtype=np.float64)
-last_act_a = np.zeros(3, dtype=np.float64)  # 0: HL entry, 1: LL entry, 2: TR exit
-# 캐시에서 이전 값이 남아있을 경우를 대비해 명시적으로 0으로 덮어쓰기
+# [BUG FIX] globals() 캐싱으로 인한 이전 Trial 상태 오염 방지 및 Numba-JIT 배열 참조 유지
+if 'id_arr' not in globals():
+    globals()['id_arr'] = np.zeros(1, dtype=np.int32)
+    globals()['price_arr'] = np.zeros(1, dtype=np.float64)
+    globals()['size_arr'] = np.zeros(1, dtype=np.float64)
+    globals()['inst_qty_a'] = np.zeros(1, dtype=np.float64)
+    globals()['last_act_a'] = np.zeros(3, dtype=np.float64)  # 0: HL entry, 1: LL entry, 2: TR exit
+
+id_arr = globals()['id_arr']
+price_arr = globals()['price_arr']
+size_arr = globals()['size_arr']
+inst_qty_a = globals()['inst_qty_a']
+last_act_a = globals()['last_act_a']
+
+# 캐시에서 이전 값이 남아있을 경우를 대비해 명시적으로 0으로 덮어쓰기 (In-place 초기화)
 id_arr[:] = 0; price_arr[:] = 0.0; size_arr[:] = 0.0; inst_qty_a[:] = 0.0; last_act_a[:] = 0.0
 
 # =========[ 주문 함수 ]=========
