@@ -284,7 +284,7 @@ else:
 
 # --- LL 트리거 가격 ---
 safe_epsilon = 1.0 / (10 ** ex_dec)
-safe_close = np.maximum(c_np_htf, safe_epsilon)
+safe_close = np.maximum(np.nan_to_num(c_np_htf, nan=0.0), safe_epsilon)
 hl_ratio   = (h_np_htf - l_np_htf) / safe_close
 ma1_arr    = n_sma(hl_ratio, ma1_len)
 
@@ -382,7 +382,9 @@ if 'JIT_ORDER_V5' not in globals():
             cur_htf = htf_id_t[i]
 
             cash_safe = max(cash, 0.0)
-            cl_now = max(cl[i-1], tick)
+            prev_cl = cl[i-1]
+            if np.isnan(prev_cl): prev_cl = 0.0
+            cl_now = max(prev_cl, tick)
 
             # HL 진입
             if not np.isnan(hlp_cur) and hlp_cur > 0:
@@ -394,7 +396,8 @@ if 'JIT_ORDER_V5' not in globals():
                         qty = np.floor(base_qty * p10 + 0.5) / p10
                         if qty > 0:
                             id_a[col] = 1; price_a[col] = ep; size_a[col] = qty
-                            inst_qty_a[col] = np.ceil(base_qty / inst_num * p10) / p10
+                            base_qty_pine = cash_safe / cl_now
+                            inst_qty_a[col] = np.ceil(base_qty_pine / inst_num * p10) / p10
                             last_act_a[0] = cur_htf
                             return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=0, fees=0.0008)
                 else:  # close 모드 (HTF 종가 시그널)
@@ -404,7 +407,8 @@ if 'JIT_ORDER_V5' not in globals():
                         qty = np.floor(base_qty * p10 + 0.5) / p10
                         if qty > 0:
                             id_a[col] = 1; price_a[col] = ep; size_a[col] = qty
-                            inst_qty_a[col] = np.ceil(base_qty / inst_num * p10) / p10
+                            base_qty_pine = cash_safe / cl_now
+                            inst_qty_a[col] = np.ceil(base_qty_pine / inst_num * p10) / p10
                             last_act_a[0] = hl_sig_t[i]
                             return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=0, fees=0.0008)
 
@@ -412,7 +416,7 @@ if 'JIT_ORDER_V5' not in globals():
             if not np.isnan(llp_cur) and llp_cur > 0:
                 if o_m_l == 0:  # limits (Pine: limit)
                     if l[i] <= llp_cur and cur_htf != last_act_a[1] and llp_cur > 0:
-                        ep = min(o[i], llp_cur) # Limit order: no negative slippage
+                        ep = min(o[i], llp_cur) + slip # Limit order slippage parity
                         base_qty = cash_safe * 0.9992 / cl_now
                         qty = np.floor(base_qty * p10 + 0.5) / p10
                         if qty > 0:
@@ -497,11 +501,11 @@ if 'JIT_ORDER_V5' not in globals():
                     if is_tp and o[i] >= tpp:
                         exit_p = o[i]
                     elif not is_tp and o[i] <= slp:
-                        exit_p = o[i]
-                    if not is_tp:
-                        exit_p = max(exit_p - slip, tick)
+                        exit_p = o[i] - slip # Gap fill on stop loss gets slippage in Pine
+                    elif not is_tp:
+                        exit_p = max(exit_p - slip, tick) # Normal stop loss gets slippage
                     else:
-                        exit_p = max(exit_p, tick)
+                        exit_p = max(exit_p, tick) # Normal TP no slippage
             else:               # close 모드: 종가로 체크 (barstate.isconfirmed)
                 is_hit = False
                 if is_new_htf_bar:
