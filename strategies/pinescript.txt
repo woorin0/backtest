@@ -114,31 +114,38 @@ hasOpenTrade   = strategy.opentrades > 0
 lastEntryPrice = hasOpenTrade ? strategy.opentrades.entry_price(strategy.opentrades - 1) : na
 
 // =========[ TP/SL 계산 ]=========
+// Use pending limit/stop prices for TP/SL to handle strategy.exit attached to pending orders
+HLPlot_safe = not na(HLPlot) and HLPlot > 0 ? safeStop(HLPlot) : na
+LLPlot_safe = not na(LLPlot) and LLPlot > 0 ? safeLimit(LLPlot) : na
+
+basePriceHL = hasOpenTrade ? lastEntryPrice : (OpenAtHL == 'limits' ? HLPlot_safe : na)
+basePriceLL = hasOpenTrade ? lastEntryPrice : (OpenAtLL == 'limits' ? LLPlot_safe : na)
+
 TP_Plot = float(na)
-if hasOpenTrade and not na(lastEntryPrice)
+if not na(basePriceHL)
     if HL_TP_Price == 'Fixed'
-        TP_Plot := lastEntryPrice * (1 + TP_HL_f)
+        TP_Plot := basePriceHL * (1 + TP_HL_f)
     if HL_TP_Price == 'ATR'
-        TP_Plot := lastEntryPrice + longTakeProfitAtrMul * openAtr
+        TP_Plot := basePriceHL + longTakeProfitAtrMul * openAtr
     if HL_TP_Price == 'both'
-        TP_Plot := math.max(lastEntryPrice * (1 + TP_HL_f), lastEntryPrice + longTakeProfitAtrMul * openAtr)
+        TP_Plot := math.max(basePriceHL * (1 + TP_HL_f), basePriceHL + longTakeProfitAtrMul * openAtr)
 
 TP_Plot1 = float(na)
-if hasOpenTrade and not na(lastEntryPrice)
-    TP_Plot1 := lastEntryPrice * (1 + TP_LL_f)
+if not na(basePriceLL)
+    TP_Plot1 := basePriceLL * (1 + TP_LL_f)
 
 Stop_HL_Price = float(na)
-if hasOpenTrade and not na(lastEntryPrice)
+if not na(basePriceHL)
     if HL_SL_Price == 'Fixed'
-        Stop_HL_Price := lastEntryPrice * (1 - SL_HL_f)
+        Stop_HL_Price := basePriceHL * (1 - SL_HL_f)
     if HL_SL_Price == 'ATR'
-        Stop_HL_Price := lastEntryPrice - HL_SL_AtrMul * HL_SL_openAtr
+        Stop_HL_Price := basePriceHL - HL_SL_AtrMul * HL_SL_openAtr
     if HL_SL_Price == 'both'
-        Stop_HL_Price := math.max(lastEntryPrice * (1 - SL_HL_f), lastEntryPrice - HL_SL_AtrMul * HL_SL_openAtr)
+        Stop_HL_Price := math.max(basePriceHL * (1 - SL_HL_f), basePriceHL - HL_SL_AtrMul * HL_SL_openAtr)
 
 Stop_LL_Price = float(na)
-if hasOpenTrade and not na(lastEntryPrice)
-    Stop_LL_Price := lastEntryPrice * (1 - SL_LL_f)
+if not na(basePriceLL)
+    Stop_LL_Price := basePriceLL * (1 - SL_LL_f)
 
 TP_HL = not na(TP_Plot) and TP_Plot <= close
 SL_HL = not na(Stop_HL_Price) and Stop_HL_Price >= close
