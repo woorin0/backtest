@@ -278,7 +278,8 @@ elif hl_price_type == 'H/L OTT': hl_p = hott_s.copy()
 else: hl_p = np.fmax(hott_s, bb_u)
 
 # --- LL 트리거 가격 ---
-safe_close = np.where(c_np_htf == 0, 0.0001, c_np_htf)
+safe_epsilon = 1.0 / (10 ** ex_dec)
+safe_close = np.maximum(c_np_htf, safe_epsilon)
 hl_ratio   = (h_np_htf - l_np_htf) / safe_close
 ma1_arr    = n_sma(hl_ratio, ma1_len)
 
