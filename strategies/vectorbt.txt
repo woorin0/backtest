@@ -272,10 +272,15 @@ hott_s = np.full(len(c_np_htf), np.nan)
 if h_int > 0: hott_s[h_int:] = hott_raw[:-h_int]
 else:         hott_s = hott_raw.copy()
 
+# Pine Script `hott_plot = nz(hott_val)` 완벽 재현
+hott_s = np.nan_to_num(hott_s, nan=0.0)
+
 # --- HL 트리거 가격 ---
 if hl_price_type == 'BB': hl_p = bb_u.copy()
 elif hl_price_type == 'H/L OTT': hl_p = hott_s.copy()
-else: hl_p = np.fmax(hott_s, bb_u)
+else:
+    # math.max()는 하나라도 na이면 na를 반환해야 하므로 np.fmax가 아닌 np.maximum 사용
+    hl_p = np.maximum(hott_s, bb_u)
 
 # --- LL 트리거 가격 ---
 safe_epsilon = 1.0 / (10 ** ex_dec)
@@ -288,8 +293,9 @@ if ll_vol_filter: ll_p = ma2_arr * (1.0 - ma1_arr * ll_mult - en_ll_per)
 else:             ll_p = ma2_arr * (1.0 - en_ll_per)
 
 # --- ATR (Pine ta.atr 완전 재현: ta.rma 기반) ---
-atr_tp_arr = calc_atr_pine_nb(h_np_htf, l_np_htf, c_np_htf, atr_len)
-atr_sl_arr = calc_atr_pine_nb(h_np_htf, l_np_htf, c_np_htf, atr_len2)
+# nz(ta.atr()) 동일하게 np.nan_to_num 적용 (초기 결측치를 0.0으로)
+atr_tp_arr = np.nan_to_num(calc_atr_pine_nb(h_np_htf, l_np_htf, c_np_htf, atr_len), nan=0.0)
+atr_sl_arr = np.nan_to_num(calc_atr_pine_nb(h_np_htf, l_np_htf, c_np_htf, atr_len2), nan=0.0)
 
 # --- TR MA ---
 tr_ma_arr = calc_ma(df_htf['Close'], vol_htf, tr_ma_len, tr_ma_type)
@@ -322,21 +328,21 @@ tr_sig_t = align_to_ltf(tr_exit_sig, df_htf, df_ltf)
 htf_id_t = align_to_ltf(htf_idx, df_htf, df_ltf)
 
 # =========[ 상태 배열 (매 Trial마다 반드시 새로 초기화) ]=========
-# [BUG FIX] globals() 캐싱으로 인한 이전 Trial 상태 오염 방지 및 Numba-JIT 배열 참조 유지
+# [BUG FIX] globals() 캐싱으로 인한 이전 Trial 상태 오염 방지
 if 'id_arr' not in globals():
-    globals()['id_arr'] = np.zeros(1, dtype=np.int32)
+    globals()['id_arr']    = np.zeros(1, dtype=np.int32)
     globals()['price_arr'] = np.zeros(1, dtype=np.float64)
-    globals()['size_arr'] = np.zeros(1, dtype=np.float64)
-    globals()['inst_qty_a'] = np.zeros(1, dtype=np.float64)
-    globals()['last_act_a'] = np.zeros(3, dtype=np.float64)  # 0: HL entry, 1: LL entry, 2: TR exit
+    globals()['size_arr']  = np.zeros(1, dtype=np.float64)
+    globals()['inst_qty_a']= np.zeros(1, dtype=np.float64)
+    globals()['last_act_a'] = np.zeros(3, dtype=np.float64)
 
-id_arr = globals()['id_arr']
+id_arr    = globals()['id_arr']
 price_arr = globals()['price_arr']
-size_arr = globals()['size_arr']
-inst_qty_a = globals()['inst_qty_a']
+size_arr  = globals()['size_arr']
+inst_qty_a= globals()['inst_qty_a']
 last_act_a = globals()['last_act_a']
 
-# 캐시에서 이전 값이 남아있을 경우를 대비해 명시적으로 0으로 덮어쓰기 (In-place 초기화)
+# 캐시에서 이전 값이 남아있을 경우를 대비해 명시적으로 0으로 덮어쓰기
 id_arr[:] = 0; price_arr[:] = 0.0; size_arr[:] = 0.0; inst_qty_a[:] = 0.0; last_act_a[:] = 0.0
 
 # =========[ 주문 함수 ]=========
