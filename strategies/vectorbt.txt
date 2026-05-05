@@ -348,6 +348,7 @@ if 'JIT_ORDER_V5' not in globals():
                       hl_sig_t, ll_sig_t, tr_sig_t, htf_id_t,
                       atp, ats,
                       inst_num, use_tr,
+                      hl_min_bar, ll_min_bar,
                       o_m_h, o_m_l,
                       e_m_h, e_m_l,
                       tp_t, sl_t,
@@ -381,7 +382,7 @@ if 'JIT_ORDER_V5' not in globals():
             cl_now = max(prev_cl, tick)
 
             # HL 진입
-            if not np.isnan(hlp_cur) and hlp_cur > 0:
+            if not np.isnan(hlp_cur) and hlp_cur > 0 and i > hl_min_bar:
                 if o_m_h == 0:  # limits (stop order)
                     safe_stop = max(hlp_cur, tick)
                     if h[i] >= safe_stop and cur_htf != last_act_a[0]:
@@ -407,7 +408,7 @@ if 'JIT_ORDER_V5' not in globals():
                             return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=0, fees=0.0008)
 
             # LL 진입
-            if not np.isnan(llp_cur) and llp_cur > 0:
+            if not np.isnan(llp_cur) and llp_cur > 0 and i > ll_min_bar:
                 if o_m_l == 0:  # limits (Pine: limit)
                     if l[i] <= llp_cur and cur_htf != last_act_a[1] and llp_cur > 0:
                         ep = min(o[i], llp_cur) + slip # Limit order slippage parity
@@ -545,6 +546,9 @@ s_m    = t_map.get(sl_hl_type, 1)
 
 # [BUG FIX] 수수료를 글로벌 설정이 아닌 from_order_func에 직접 주입
 # vbt.settings.portfolio['fees']는 from_order_func에 자동 적용되지 않음
+hl_min_bar = max(hott_h_len, bb_len)
+ll_min_bar = ma2_len
+
 portfolio = vbt.Portfolio.from_order_func(
     c_np,
     order_func_nb,
@@ -553,6 +557,7 @@ portfolio = vbt.Portfolio.from_order_func(
     hl_sig_t, ll_sig_t, tr_sig_t, htf_id_t,
     atp_t, ats_t,
     inst, tr_hl,
+    hl_min_bar, ll_min_bar,
     o_h_m, o_l_m,
     e_h_m, e_l_m,
     t_m, s_m,
