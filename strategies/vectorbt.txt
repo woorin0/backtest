@@ -520,12 +520,16 @@ if 'JIT_ORDER_V5' not in globals():
                 # installment 분할청산 (HL만 적용, Pine: hl_entry_installment_qty)
                 exit_qty = pos
                 if cur_state == 1:
-                    inst_qty = inst_qty_a[col]
-                    if inst_qty > 0:
-                        exit_qty = min(inst_qty, pos)
-
-                    if pos <= exit_qty:
+                    if inst_num == 1:
+                        exit_qty = pos
                         inst_qty_a[col] = 0.0
+                    else:
+                        inst_qty = inst_qty_a[col]
+                        if inst_qty > 0:
+                            exit_qty = min(inst_qty, pos)
+
+                        if pos <= exit_qty:
+                            inst_qty_a[col] = 0.0
 
                 return vbt.portfolio.nb.order_nb(size=-exit_qty, price=exit_p, size_type=0, fees=0.0008)
 
