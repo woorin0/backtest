@@ -12,3 +12,4 @@ redis
 optuna
 optuna-integration
 SQLAlchemy
+pyarrow
