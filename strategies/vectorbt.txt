@@ -387,7 +387,7 @@ if 'JIT_ORDER_V5' not in globals():
                     safe_stop = max(hlp_cur, tick)
                     if h[i] >= safe_stop and cur_htf != last_act_a[0]:
                         ep = max(o[i], safe_stop) + slip
-                        base_qty = cash_safe * 0.9992 / cl_now
+                        base_qty = cash_safe / cl_now
                         qty = np.floor(base_qty * p10 + 0.5) / p10
                         if qty > 0:
                             id_a[col] = 1; price_a[col] = ep; size_a[col] = qty
@@ -398,7 +398,7 @@ if 'JIT_ORDER_V5' not in globals():
                 else:  # close 모드 (HTF 종가 시그널)
                     if hl_sig_t[i] > 0 and hl_sig_t[i] != last_act_a[0]:
                         ep = o[i] + slip
-                        base_qty = cash_safe * 0.9992 / cl_now
+                        base_qty = cash_safe / cl_now
                         qty = np.floor(base_qty * p10 + 0.5) / p10
                         if qty > 0:
                             id_a[col] = 1; price_a[col] = ep; size_a[col] = qty
@@ -412,7 +412,7 @@ if 'JIT_ORDER_V5' not in globals():
                 if o_m_l == 0:  # limits (Pine: limit)
                     if l[i] <= llp_cur and cur_htf != last_act_a[1] and llp_cur > 0:
                         ep = min(o[i], llp_cur) + slip # Limit order slippage parity
-                        base_qty = cash_safe * 0.9992 / cl_now
+                        base_qty = cash_safe / cl_now
                         qty = np.floor(base_qty * p10 + 0.5) / p10
                         if qty > 0:
                             id_a[col] = 2; price_a[col] = ep; size_a[col] = qty
@@ -422,7 +422,7 @@ if 'JIT_ORDER_V5' not in globals():
                     if ll_sig_t[i] > 0 and ll_sig_t[i] != last_act_a[1]:
                         ep = o[i] + slip # Long entry close: ADD slip
                         if ep <= 0: ep = tick
-                        base_qty = cash_safe * 0.9992 / cl_now
+                        base_qty = cash_safe / cl_now
                         qty = np.floor(base_qty * p10 + 0.5) / p10
                         if qty > 0:
                             id_a[col] = 2; price_a[col] = ep; size_a[col] = qty
