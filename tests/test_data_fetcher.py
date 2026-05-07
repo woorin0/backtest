@@ -29,7 +29,7 @@ def test_get_cache_path_deterministic():
     # Pre-calculated MD5 for 'binance_BTC/USDT_1h_2023-01-01_2023-01-02_p250_v43'
     # is '7ee6e05163fd6d001a6fab9e1f202067'
     assert '7ee6e05163fd6d001a6fab9e1f202067' in path1
-    assert path1.endswith('.pkl')
+    assert path1.endswith('.parquet')
     assert path1.startswith(CACHE_DIR)
 
 def test_get_cache_path_uniqueness():

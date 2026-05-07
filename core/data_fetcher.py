@@ -36,7 +36,7 @@ def get_cache_path(exchange_id, symbol, timeframe, start_date, end_date, padding
     hash_key = hashlib.md5(key.encode()).hexdigest()
     if not os.path.exists(CACHE_DIR):
         os.makedirs(CACHE_DIR)
-    return os.path.join(CACHE_DIR, f"ohlcv_{hash_key}.pkl")
+    return os.path.join(CACHE_DIR, f"ohlcv_{hash_key}.parquet")
 
 def fetch_candles(exchange_id: str, symbol: str, timeframe: str, start_date, end_date, limit: int, progress_bar=None, use_cache=True, padding_candles=250):
     """ccxt를 사용하여 지정된 기간 동안의 데이터를 수집 (지표 계산용 Warm-up 패딩 포함)"""
@@ -47,7 +47,7 @@ def fetch_candles(exchange_id: str, symbol: str, timeframe: str, start_date, end
         if progress_bar:
             progress_bar.progress(100, text=f"로컬 캐시에서 데이터를 불러왔습니다: {symbol}")
         try:
-            return pd.read_pickle(cache_path)
+            return pd.read_parquet(cache_path)
         except Exception as e:
             print(f"캐시 읽기 에러 (재수집 시도): {e}")
 
@@ -108,7 +108,7 @@ def fetch_candles(exchange_id: str, symbol: str, timeframe: str, start_date, end
         end_dt = pd.to_datetime(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
         df = df[df.index <= end_dt]
         
-        if use_cache: df.to_pickle(cache_path)
+        if use_cache: df.to_parquet(cache_path)
         if progress_bar: progress_bar.progress(100, text="데이터 수집 및 캐싱 완료")
             
         return df

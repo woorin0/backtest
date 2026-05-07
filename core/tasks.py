@@ -113,8 +113,11 @@ def prepare_mtf_data_task(self, study_name: str, exchange: str, symbol: str, htf
         # 3. 데이터 결합 및 저장
         rp.progress(90, "데이터 결합 및 저장 중...")
         dp_htf_cache = get_cache_path(exchange, symbol, htf, start_date, end_date, padding_candles=1000)
-        data_path = f"{dp_htf_cache}_mtf.pkl"
-        pd.to_pickle({'htf': data_htf, 'ltf': data_ltf}, data_path)
+        data_path = f"{dp_htf_cache}_mtf.parquet"
+
+        # Parquet은 딕셔너리 직접 저장을 지원하지 않으므로 MultiIndex로 변환하여 저장
+        mtf_data = pd.concat([data_htf, data_ltf], keys=['htf', 'ltf'])
+        mtf_data.to_parquet(data_path)
         
         # 4. 최적화 작업(Chord) 트리거
         rp.progress(100, "최적화 작업을 큐에 등록 중...")
@@ -171,6 +174,16 @@ def prepare_mtf_data_task(self, study_name: str, exchange: str, symbol: str, htf
         send_discord_error(err_msg, pair=symbol, engine=engine)
         return {"status": "FAILED", "error": err_msg}
 
+def load_data_safe(data_path: str):
+    """[V19.1] Parquet으로 저장된 (MultiIndex) 데이터를 로드하여 필요 시 딕셔너리로 복원"""
+    data_raw = pd.read_parquet(data_path)
+    if isinstance(data_raw.index, pd.MultiIndex) and len(data_raw.index.levels) > 0 and set(data_raw.index.levels[0]).issubset({'htf', 'ltf'}):
+        return {
+            'htf': data_raw.xs('htf', level=0),
+            'ltf': data_raw.xs('ltf', level=0)
+        }
+    return data_raw
+
 @celery_app.task(bind=True)
 def run_optuna_worker(self, config: WorkerConfig):
     worker_id = self.request.id
@@ -185,7 +198,7 @@ def run_optuna_worker(self, config: WorkerConfig):
     total_trials = config['total_trials']
 
     try:
-        data = pd.read_pickle(data_path)
+        data = load_data_safe(data_path)
         study = get_study(study_name)
         
         def objective(trial):
@@ -272,7 +285,7 @@ def finalize_optuna_study(self, worker_results, study_name: str, data_path: str,
     
     try:
         study = get_study(study_name)
-        data = pd.read_pickle(data_path)
+        data = load_data_safe(data_path)
         
         # 🚨 고성능 엑셀 리포트 생성 (상위 50개 상세 데이터 포함)
         excel_output, report_df = create_excel_report(study, data)
