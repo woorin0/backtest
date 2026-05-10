@@ -108,6 +108,8 @@ def fetch_candles(exchange_id: str, symbol: str, timeframe: str, start_date, end
         ex_lower = exchange_id.lower()
         if ex_lower == 'upbit':
             limit = min(limit, 200)
+        elif ex_lower == 'binance':
+            limit = min(limit, 1000)
         
         all_ohlcv = []
         if progress_bar:
@@ -151,10 +153,8 @@ def fetch_candles(exchange_id: str, symbol: str, timeframe: str, start_date, end
             else: since = last_timestamp + 1
             
             # 🚀 [V10.0] Upbit은 더 긴 대기 필요
-            wait_time = max(exchange.rateLimit / 1000, 0.1) if hasattr(exchange, 'rateLimit') else 0.5
             if ex_lower == 'upbit':
-                wait_time = max(wait_time, 0.2)
-            time.sleep(wait_time)
+                time.sleep(0.2)
             
             if progress_bar:
                 # 🚀 [V19] 예상 다운로드 개수 대비 실제 다운로드 개수로 % 동적 계산
