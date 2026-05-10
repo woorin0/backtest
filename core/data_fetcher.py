@@ -60,7 +60,7 @@ def validate_timeframe(exchange_id: str, timeframe: str):
             if best is None or s_ms < get_timeframe_ms(best):
                 best = s_tf
     fallback = best if best else supported[-1]
-    print(f"⚠️ {exchange_id}는 '{timeframe}' 미지원 → '{fallback}'로 대체합니다.")
+    print(f"[Warning] {exchange_id}는 '{timeframe}' 미지원 -> '{fallback}'로 대체합니다.")
     return fallback
 
 def fetch_candles(exchange_id: str, symbol: str, timeframe: str, start_date, end_date, limit: int, progress_bar=None, use_cache=True, padding_candles=250):
@@ -127,7 +127,7 @@ def fetch_candles(exchange_id: str, symbol: str, timeframe: str, start_date, end
             if not ohlcv:
                 consecutive_empty += 1
                 if consecutive_empty > 3:
-                    print(f"⚠️ 연속 빈 응답 {consecutive_empty}회 → 수집 종료 (since={since})")
+                    print(f"[Warning] 연속 빈 응답 {consecutive_empty}회 -> 수집 종료 (since={since})")
                     break
                 # 🚀 [V10.0] 빈 응답 시 시간을 건너뛰어 재시도 (Upbit 과거 데이터 공백 대응)
                 since += tf_ms * limit
@@ -169,7 +169,7 @@ def fetch_candles(exchange_id: str, symbol: str, timeframe: str, start_date, end
         df = df[df.index <= end_dt]
         
         if len(df) == 0:
-            print(f"⚠️ 필터링 후 데이터가 0건입니다. (기간: {start_date} ~ {end_date})")
+            print(f"[Warning] 필터링 후 데이터가 0건입니다. (기간: {start_date} ~ {end_date})")
             return None
         
         if use_cache: df.to_parquet(cache_path)

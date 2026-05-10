@@ -52,7 +52,7 @@ with st.sidebar:
     ltf = st.selectbox("체결 정밀도 (LTF)", ["1m", "3m", "5m", "15m"], index=2)
     trials = st.number_input("탐색수", 10, 100000, 100)
     workers = st.number_input("워커 수 (병렬 엔진)", 2, 8, 4)
-    repeat_count = st.number_input("반복수 (자동 연속 실행)", 1, 10, 1)
+    repeat_count = st.number_input("반복수 (자동 연속 실행)", 1, 110, 1)
     
     st.markdown("---")
     st.markdown("📅 **백테스트 기간 설정**")
