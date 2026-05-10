@@ -115,6 +115,11 @@ def fetch_candles(exchange_id: str, symbol: str, timeframe: str, start_date, end
             
         retry_count = 0
         consecutive_empty = 0  # 🚀 [V10.0] 연속 빈 응답 카운터
+
+        # 🚨 [Bugfix] 연속 빈 응답 허용치를 패딩 기간 + 여유분(최대 10초 스캔 분량, 약 50번 점프)으로 동적 계산하여 조기 종료 방지
+        safe_limit = max(limit, 1)
+        max_empty_jumps = max(3, int(padding_candles / safe_limit) + 50)
+
         while since < end_timestamp:
             try:
                 ohlcv = exchange.fetch_ohlcv(symbol, timeframe, since=since, limit=limit)
@@ -126,7 +131,7 @@ def fetch_candles(exchange_id: str, symbol: str, timeframe: str, start_date, end
             
             if not ohlcv:
                 consecutive_empty += 1
-                if consecutive_empty > 3:
+                if consecutive_empty > max_empty_jumps:
                     print(f"[Warning] 연속 빈 응답 {consecutive_empty}회 -> 수집 종료 (since={since})")
                     break
                 # 🚀 [V10.0] 빈 응답 시 시간을 건너뛰어 재시도 (Upbit 과거 데이터 공백 대응)
