@@ -241,9 +241,9 @@ if 'optuna_trial' in globals() and optuna_trial:
 else:
     cerebro.addstrategy(TestStrategy)
 cerebro.adddata(bt.feeds.PandasData(dataname=data))
-cerebro.broker.setcash(1000000.0); cerebro.broker.setcommission(commission=0.0008)
+cerebro.broker.setcash(500000.0); cerebro.broker.setcommission(commission=0.0008)
 cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name='trades'); cerebro.addanalyzer(bt.analyzers.DrawDown, _name='drawdown')
-init_val = 1000000.0; results = cerebro.run(); final_val = cerebro.broker.getvalue()
+init_val = 500000.0; results = cerebro.run(); final_val = cerebro.broker.getvalue()
 t_info = results[0].analyzers.trades.get_analysis(); d_info = results[0].analyzers.drawdown.get_analysis()
 total_tr = t_info.total.total if 'total' in t_info else 0
 win_rate = round((t_info.won.total / total_tr) * 100, 2) if total_tr > 0 and 'won' in t_info else 0.0

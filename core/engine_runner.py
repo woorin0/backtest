@@ -35,7 +35,7 @@ def run_backtrader(code_str: str, data: pd.DataFrame, optuna_trial=None, externa
         else: cerebro.addstrategy(strategy_class)
         
         cerebro.adddata(bt.feeds.PandasData(dataname=data))
-        cerebro.broker.setcash(10000.0)
+        cerebro.broker.setcash(500000.0)
         cerebro.broker.setcommission(commission=0.0008)
         
         # 🚨 [수정] bt.indicators.DrawDown -> bt.analyzers.DrawDown
@@ -50,7 +50,7 @@ def run_backtrader(code_str: str, data: pd.DataFrame, optuna_trial=None, externa
         dd_anlz = strat.analyzers.drawdown.get_analysis()
         trades_anlz = strat.analyzers.trades.get_analysis()
         
-        tot_return = (final_value - 10000.0) / 100.0
+        tot_return = (final_value - 500000.0) / 5000.0
         max_dd = dd_anlz.max.drawdown if 'max' in dd_anlz else 0.0
         
         # 수치 보호 로직
@@ -62,7 +62,7 @@ def run_backtrader(code_str: str, data: pd.DataFrame, optuna_trial=None, externa
             "Win Rate (%)": 0.0,
             "MDD (%)": round(max_dd, 2),
             "Total Trades": 0,
-            "Total Profit": round(final_value - 10000.0, 2)
+            "Total Profit": round(final_value - 500000.0, 2)
         }
         return True, metrics
 

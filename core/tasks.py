@@ -209,6 +209,11 @@ def run_optuna_worker(self, config: WorkerConfig):
             nonlocal error_notified
             status_redis.set(f"worker_status_{worker_id}", f"최적화 중 ({trial.number}/{n_trials})", ex=600)
             
+            # 취소 플래그 확인 (Graceful Stop)
+            if status_redis.get(f"cancel:{study_name}") == "1":
+                study.stop()
+                return 0.0
+
             # 🚀 [V7.5] 모든 워커가 합산 목표치(total_trials)를 초과하지 않도록 실시간 글로벌 체크
             current_progress = status_redis.get(f"progress:{study_name}")
             if current_progress and int(current_progress) >= total_trials:

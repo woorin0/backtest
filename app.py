@@ -130,6 +130,8 @@ if active_task:
         fetch_status = status_redis.get(f"data_fetch_status_{sn}")
         st.info(fetch_status if fetch_status else "백그라운드에서 데이터를 준비하고 있습니다...")
         if st.button("❌ 준비 중단"):
+            if active_task.get("prepare_task_id"):
+                celery_app.control.revoke(active_task.get("prepare_task_id"), terminate=True)
             if os.path.exists(CACHE_FILE): os.remove(CACHE_FILE)
             st.rerun()
         time.sleep(2)
@@ -188,7 +190,7 @@ if btn_start:
         json.dump(active_task_dict, f)
         
     # Celery 태스크 발사 (데이터 수집 -> 최적화 -> 집계까지 원스톱)
-    prepare_mtf_data_task.delay(
+    prepare_task = prepare_mtf_data_task.delay(
         sn, exc, sym, tf, ltf, 
         date_start.strftime("%Y-%m-%d"), 
         date_end.strftime("%Y-%m-%d"), 
@@ -196,6 +198,11 @@ if btn_start:
         trials, workers, repeat_count, eng
     )
     
+    # 🚀 [V9.0.1] 데이터 준비 작업의 실제 Celery 태스크 ID를 캡처하여 강제 중단 시 확실히 취소되게 함
+    active_task_dict["prepare_task_id"] = prepare_task.id
+    with open(CACHE_FILE, "w") as f:
+        json.dump(active_task_dict, f)
+
     st.rerun()
 
 if active_task:
@@ -244,6 +251,8 @@ if active_task:
             
             if not tk.ready():
                 if st.button("⛔ 실시간 백테스트 강제 중단", use_container_width=True, type="secondary"):
+                    # 0. Optuna 워커 루프 종료 플래그 설정 (Graceful Stop)
+                    status_redis.set(f"cancel:{active_task.get('study_name')}", "1", ex=3600)
                     # 1. 태스크 취소 (Chord + Workers)
                     celery_app.control.revoke(active_task.get("task_id"), terminate=True)
                     for wid in active_task.get("worker_ids", []):
@@ -254,7 +263,8 @@ if active_task:
                     time.sleep(1)
                     st.rerun()
 
-            status_slot.info(f"📡 {active_task.get('study_name')} 세션이 {workers}개 코어를 풀가동 중입니다.")
+            sym_info = active_task.get("params", {}).get("sym", "알 수 없음")
+            status_slot.info(f"📡 {active_task.get('study_name')} 세션이 [{sym_info}] 종목에 대해 {workers}개 코어를 풀가동 중입니다.")
             
             if tk.ready():
                 st.rerun() # 작업 완료 시에만 전체 페이지 갱신
