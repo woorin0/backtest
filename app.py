@@ -41,8 +41,13 @@ if not st.session_state["logged_in"]:
 # ----------------- [사이드바] -----------------
 with st.sidebar:
     st.title("⚙️ Control Panel")
+    exc = st.selectbox("거래소", ["Binance", "Upbit"], key="exchange_sel")
+    
+    # 거래소에 따른 기본 심볼 설정
+    default_sym = "BTC/USDT" if exc == "Binance" else "BTC/KRW"
+    sym = st.text_input("심볼", default_sym, key="symbol_sel")
+    
     eng = st.selectbox("엔진", ["Vectorbt", "Backtrader"], key="engine_sel")
-    sym = st.text_input("심볼", "BTC/USDT")
     tf = st.selectbox("주기 (HTF)", ["15m", "30m", "1h", "2h", "4h"])
     ltf = st.selectbox("체결 정밀도 (LTF)", ["1m", "3m", "5m", "15m"], index=2)
     trials = st.number_input("탐색수", 10, 100000, 100)
@@ -176,7 +181,7 @@ if btn_start:
         "n_trials": trials,
         "current_iter": 1,
         "total_iters": repeat_count,
-        "params": {"eng": eng, "sym": sym, "tf": tf}
+        "params": {"exc": exc, "eng": eng, "sym": sym, "tf": tf}
     }
     
     with open(CACHE_FILE, "w") as f:
@@ -184,7 +189,7 @@ if btn_start:
         
     # Celery 태스크 발사 (데이터 수집 -> 최적화 -> 집계까지 원스톱)
     prepare_mtf_data_task.delay(
-        sn, "Binance", sym, tf, ltf, 
+        sn, exc, sym, tf, ltf, 
         date_start.strftime("%Y-%m-%d"), 
         date_end.strftime("%Y-%m-%d"), 
         st.session_state["strategy_code"], 
