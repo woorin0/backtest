@@ -107,8 +107,12 @@ def prepare_mtf_data_task(self, study_name: str, exchange: str, symbol: str, htf
         rp.progress(50, f"LTF({ltf}) 데이터 수집 중...")
         data_ltf = fetch_candles(exchange, symbol, ltf, start_date, end_date, 1000, progress_bar=rp, padding_candles=0)
         
-        if data_htf is None or data_ltf is None:
-            raise Exception("데이터 수집 실패 (거래소 응답 없음)")
+        if data_htf is None and data_ltf is None:
+            raise Exception(f"HTF({htf})/LTF({ltf}) 데이터 모두 수집 실패 — {exchange} 거래소에서 {symbol} 응답 없음")
+        elif data_htf is None:
+            raise Exception(f"HTF({htf}) 데이터 수집 실패 — {exchange}/{symbol} 확인 필요")
+        elif data_ltf is None:
+            raise Exception(f"LTF({ltf}) 데이터 수집 실패 — {exchange}/{symbol} 확인 필요")
 
         # 3. 데이터 결합 및 저장
         rp.progress(90, "데이터 결합 및 저장 중...")
