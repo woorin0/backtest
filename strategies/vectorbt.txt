@@ -14,51 +14,37 @@ if 'JIT_COMPILED_V5' not in globals():
         res = np.full(len(s), np.nan)
         for i in range(len(s)):
             if i < l - 1: continue
-            v_sum = 0.0; count = 0
+            v_sum = 0.0; valid = True
             for j in range(i - l + 1, i + 1):
-                if not np.isnan(s[j]): v_sum += s[j]; count += 1
-            if count == l: res[i] = v_sum / l
+                if np.isnan(s[j]): valid = False; break
+                v_sum += s[j]
+            if valid: res[i] = v_sum / l
         return res
 
     @njit
     def n_ema(s, l):
         res = np.full(len(s), np.nan)
         alpha = 2.0 / (l + 1.0)
-        last_val = np.nan
         for i in range(len(s)):
             if np.isnan(s[i]): continue
-            if np.isnan(last_val):
-                last_val = s[i]
-                res[i] = last_val
+            if i == 0 or np.isnan(res[i-1]):
+                res[i] = s[i]
             else:
-                res[i] = alpha * s[i] + (1.0 - alpha) * last_val
-                last_val = res[i]
+                res[i] = alpha * s[i] + (1.0 - alpha) * res[i-1]
         return res
 
     @njit
     def n_rma(s, l):
         res = np.full(len(s), np.nan)
         alpha = 1.0 / l
-        last_val = np.nan
+        sma_arr = n_sma(s, l)
         for i in range(len(s)):
-            if np.isnan(s[i]):
-                last_val = np.nan
-                continue
-            if np.isnan(last_val):
-                if i >= l - 1:
-                    valid = True
-                    sum_val = 0.0
-                    for j in range(i - l + 1, i + 1):
-                        if np.isnan(s[j]):
-                            valid = False
-                            break
-                        sum_val += s[j]
-                    if valid:
-                        last_val = sum_val / l
-                        res[i] = last_val
+            if np.isnan(s[i]): continue
+            if i == 0 or np.isnan(res[i-1]):
+                if not np.isnan(sma_arr[i]):
+                    res[i] = sma_arr[i]
             else:
-                res[i] = alpha * s[i] + (1.0 - alpha) * last_val
-                last_val = res[i]
+                res[i] = alpha * s[i] + (1.0 - alpha) * res[i-1]
         return res
 
     @njit
@@ -69,9 +55,9 @@ if 'JIT_COMPILED_V5' not in globals():
             if i < l - 1: continue
             dot_p = 0.0; valid = True
             for j in range(l):
-                val = s[i - l + 1 + j]
+                val = s[i - j]
                 if np.isnan(val): valid = False; break
-                dot_p += val * (j + 1)
+                dot_p += val * (l - j)
             if valid: res[i] = dot_p / w_sum
         return res
 
@@ -175,29 +161,7 @@ if 'JIT_ATR_PINE' not in globals():
                 tr[i] = max(hl, hpc, lpc)
 
         # ta.rma: alpha = 1/length, seed with SMA over length
-        atr = np.full(n, np.nan)
-        alpha = 1.0 / length
-        last = np.nan
-        for i in range(n):
-            if np.isnan(tr[i]):
-                last = np.nan
-                continue
-            if np.isnan(last):
-                if i >= length - 1:
-                    valid = True
-                    sum_val = 0.0
-                    for j in range(i - length + 1, i + 1):
-                        if np.isnan(tr[j]):
-                            valid = False
-                            break
-                        sum_val += tr[j]
-                    if valid:
-                        last = sum_val / length
-                        atr[i] = last
-            else:
-                last = alpha * tr[i] + (1.0 - alpha) * last
-                atr[i] = last
-        return atr
+        return n_rma(tr, length)
     globals()['JIT_ATR_PINE'] = True
 
 def calc_ma(s, v, l, t):
