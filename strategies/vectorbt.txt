@@ -76,6 +76,26 @@ if 'JIT_COMPILED_V5' not in globals():
         return res
 
     @njit
+    def n_stdev(s, l, biased=True):
+        mean_arr = n_sma(s, l)
+        res = np.full(len(s), np.nan)
+        for i in range(len(s)):
+            if i < l - 1: continue
+            if np.isnan(mean_arr[i]): continue
+            mean = mean_arr[i]
+            sum_sq = 0.0
+            count = 0
+            for j in range(l):
+                val = s[i - j]
+                if not np.isnan(val):
+                    sum_sq += (val - mean) ** 2
+                    count += 1
+            if count == l:
+                variance = sum_sq / l if biased else sum_sq / (l - 1)
+                res[i] = np.sqrt(variance)
+        return res
+
+    @njit
     def n_vwma(c_p, v_p, l):
         cv = c_p * v_p
         res_cv = n_sma(cv, l); res_v = n_sma(v_p, l)
@@ -289,7 +309,7 @@ else:
 
 # --- Bollinger Bands ---
 bb_mid = calc_ma(df_htf['Close'], vol_htf, bb_len, bb_ma_type)
-bb_std = df_htf['Close'].rolling(bb_len).std(ddof=0).values
+bb_std = n_stdev(df_htf['Close'].values, bb_len, biased=True)
 bb_mid_safe = np.where(np.isnan(bb_mid), 0.0, bb_mid)
 bb_dev = np.maximum(np.nan_to_num(bb_std * bb_dev_in, nan=0.0), bb_mid_safe * bb_min_w / 100.0)
 bb_u   = bb_mid + bb_dev
