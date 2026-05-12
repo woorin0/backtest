@@ -161,6 +161,30 @@ if 'JIT_ATR_PINE' not in globals():
         return atr
     globals()['JIT_ATR_PINE'] = True
 
+
+if 'JIT_STDEV_PINE' not in globals():
+    @njit
+    def calc_stdev_pine_nb(src, length):
+        n = len(src)
+        res = np.full(n, np.nan)
+        if length < 1:
+            return res
+        for i in range(length - 1, n):
+            sum_val = 0.0
+            for j in range(length):
+                sum_val += src[i - j]
+            avg = sum_val / length
+
+            sum_sq = 0.0
+            for j in range(length):
+                diff = src[i - j] - avg
+                if abs(diff) <= 1e-10:
+                    diff = 0.0
+                sum_sq += diff * diff
+            res[i] = np.sqrt(sum_sq / length)
+        return res
+    globals()['JIT_STDEV_PINE'] = True
+
 def calc_ma(s, v, l, t):
     if t == 'SMA': return n_sma(s.values, l)
     elif t == 'EMA': return n_ema(s.values, l)
@@ -252,7 +276,7 @@ else:
 
 # --- Bollinger Bands ---
 bb_mid = calc_ma(df_htf['Close'], vol_htf, bb_len, bb_ma_type)
-bb_std = df_htf['Close'].rolling(bb_len).std(ddof=0).values
+bb_std = calc_stdev_pine_nb(df_htf['Close'].values, bb_len)
 bb_mid_safe = np.where(np.isnan(bb_mid), 0.0, bb_mid)
 bb_dev = np.maximum(np.nan_to_num(bb_std * bb_dev_in, nan=0.0), bb_mid_safe * bb_min_w / 100.0)
 bb_u   = bb_mid + bb_dev
