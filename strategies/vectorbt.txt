@@ -103,7 +103,7 @@ if 'JIT_COMPILED_V5' not in globals():
         return res
 
     @njit
-    def n_stdev(s, l, biased=True):
+    def calc_stdev_pine_nb(s, l, biased=True):
         mean_arr = n_sma(s, l)
         res = np.full(len(s), np.nan)
         for i in range(len(s)):
@@ -115,7 +115,10 @@ if 'JIT_COMPILED_V5' not in globals():
             for j in range(l):
                 val = s[i - j]
                 if not np.isnan(val):
-                    sum_sq += (val - mean) ** 2
+                    diff = val - mean
+                    if abs(diff) <= 1e-10:
+                        diff = 0.0
+                    sum_sq += diff ** 2
                     count += 1
             if count == l:
                 variance = sum_sq / l if biased else sum_sq / (l - 1)
@@ -233,7 +236,7 @@ def ta_crossunder(source1, source2):
     이전 봉에서 source1이 source2보다 크거나 같고, 현재 봉에서 source1이 source2보다 작을 때 참.
     """
     s1_prev = pd.Series(source1).shift(1).values
-    s2_prev = pd.Series(source2).shift(1).values
+    s2_prev = source2 if isinstance(source2, (int, float)) else pd.Series(source2).shift(1).values
     return (s1_prev >= s2_prev) & (source1 < source2)
 
 def ta_crossover(source1, source2):
@@ -242,7 +245,7 @@ def ta_crossover(source1, source2):
     이전 봉에서 source1이 source2보다 작거나 같고, 현재 봉에서 source1이 source2보다 클 때 참.
     """
     s1_prev = pd.Series(source1).shift(1).values
-    s2_prev = pd.Series(source2).shift(1).values
+    s2_prev = source2 if isinstance(source2, (int, float)) else pd.Series(source2).shift(1).values
     return (s1_prev <= s2_prev) & (source1 > source2)
 
 # =========[ 데이터 로드 (MTF 대응) ]=========
@@ -326,7 +329,7 @@ else:
 
 # --- Bollinger Bands ---
 bb_mid = calc_ma(df_htf['Close'], vol_htf, bb_len, bb_ma_type)
-bb_std = n_stdev(df_htf['Close'].values, bb_len, biased=True)
+bb_std = calc_stdev_pine_nb(df_htf['Close'].values, bb_len, biased=True)
 bb_mid_safe = np.where(np.isnan(bb_mid), 0.0, bb_mid)
 bb_dev = np.fmax(np.nan_to_num(bb_std * bb_dev_in, nan=0.0), bb_mid_safe * bb_min_w / 100.0)
 bb_u   = bb_mid + bb_dev
@@ -460,51 +463,75 @@ if 'JIT_ORDER_V5' not in globals():
             hl_inst_qty = 0.0
             hl_act = 0.0
 
+            ll_hit = False
+            ll_ep = 0.0
+            ll_qty = 0.0
+            ll_act = 0.0
+
             if not np.isnan(hlp_cur) and hlp_cur > 0 and i > hl_min_bar:
                 if o_m_h == 0:  # limits (stop order)
                     safe_stop = pine_max(hlp_cur, tick)
                     if h[i] >= safe_stop and cur_htf != last_act_a[0]:
-                        ep = pine_max(o[i], safe_stop) + slip
+                        hl_ep = pine_max(o[i], safe_stop) + slip
                         base_qty = cash_safe / cl_now
-                        qty = pine_round(base_qty * p10) / p10
-                        if qty > 0:
-                            id_a[col] = 1; price_a[col] = ep; size_a[col] = qty
+                        hl_qty = pine_round(base_qty * p10) / p10
+                        if hl_qty > 0:
+                            hl_hit = True
                             base_qty_pine = cash_safe / cl_now
-                            inst_qty_a[col] = pine_ceil(base_qty_pine / inst_num * p10) / p10
-                            last_act_a[0] = cur_htf
-                            return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=0, fees=0.0008)
+                            hl_inst_qty = pine_ceil(base_qty_pine / inst_num * p10) / p10
+                            hl_act = cur_htf
                 else:  # close 모드 (HTF 종가 시그널)
                     if hl_sig_t[i] > 0 and hl_sig_t[i] != last_act_a[0]:
                         hl_ep = o[i] + slip
                         base_qty = cash_safe / cl_now
-                        qty = pine_round(base_qty * p10) / p10
-                        if qty > 0:
-                            id_a[col] = 1; price_a[col] = ep; size_a[col] = qty
+                        hl_qty = pine_round(base_qty * p10) / p10
+                        if hl_qty > 0:
+                            hl_hit = True
                             base_qty_pine = cash_safe / cl_now
-                            inst_qty_a[col] = pine_ceil(base_qty_pine / inst_num * p10) / p10
-                            last_act_a[0] = hl_sig_t[i]
-                            return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=0, fees=0.0008)
+                            hl_inst_qty = pine_ceil(base_qty_pine / inst_num * p10) / p10
+                            hl_act = hl_sig_t[i]
 
             if not np.isnan(llp_cur) and llp_cur > 0 and i > ll_min_bar:
                 if o_m_l == 0:  # limits (Pine: limit)
                     if l[i] <= llp_cur and cur_htf != last_act_a[1] and llp_cur > 0:
-                        ep = pine_min(o[i], llp_cur) + slip # Limit order slippage parity
+                        ll_ep = pine_min(o[i], llp_cur) + slip # Limit order slippage parity
                         base_qty = cash_safe / cl_now
-                        qty = pine_round(base_qty * p10) / p10
-                        if qty > 0:
-                            id_a[col] = 2; price_a[col] = ep; size_a[col] = qty
-                            last_act_a[1] = cur_htf
-                            return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=0, fees=0.0008)
+                        ll_qty = pine_round(base_qty * p10) / p10
+                        if ll_qty > 0:
+                            ll_hit = True
+                            ll_act = cur_htf
                 else:  # close
                     if ll_sig_t[i] > 0 and ll_sig_t[i] != last_act_a[1]:
                         ll_ep = o[i] + slip # Long entry close: ADD slip
                         if ll_ep <= 0: ll_ep = tick
                         base_qty = cash_safe / cl_now
-                        qty = pine_round(base_qty * p10) / p10
-                        if qty > 0:
-                            id_a[col] = 2; price_a[col] = ep; size_a[col] = qty
-                            last_act_a[1] = ll_sig_t[i]
-                            return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=0, fees=0.0008)
+                        ll_qty = pine_round(base_qty * p10) / p10
+                        if ll_qty > 0:
+                            ll_hit = True
+                            ll_act = ll_sig_t[i]
+
+            # Intrabar execution order resolution
+            if hl_hit and ll_hit:
+                if pine_abs(o[i] - h[i]) <= pine_abs(o[i] - l[i]):
+                    # Assumes O -> H -> L -> C. HL is hit first.
+                    id_a[col] = 1; price_a[col] = hl_ep; size_a[col] = hl_qty
+                    inst_qty_a[col] = hl_inst_qty
+                    last_act_a[0] = hl_act
+                    return vbt.portfolio.nb.order_nb(size=hl_qty, price=hl_ep, size_type=0, fees=0.0008)
+                else:
+                    # Assumes O -> L -> H -> C. LL is hit first.
+                    id_a[col] = 2; price_a[col] = ll_ep; size_a[col] = ll_qty
+                    last_act_a[1] = ll_act
+                    return vbt.portfolio.nb.order_nb(size=ll_qty, price=ll_ep, size_type=0, fees=0.0008)
+            elif hl_hit:
+                id_a[col] = 1; price_a[col] = hl_ep; size_a[col] = hl_qty
+                inst_qty_a[col] = hl_inst_qty
+                last_act_a[0] = hl_act
+                return vbt.portfolio.nb.order_nb(size=hl_qty, price=hl_ep, size_type=0, fees=0.0008)
+            elif ll_hit:
+                id_a[col] = 2; price_a[col] = ll_ep; size_a[col] = ll_qty
+                last_act_a[1] = ll_act
+                return vbt.portfolio.nb.order_nb(size=ll_qty, price=ll_ep, size_type=0, fees=0.0008)
 
         # ====== 청산 (포지션 있을 때) ======
         if pos > 0:
@@ -565,7 +592,7 @@ if 'JIT_ORDER_V5' not in globals():
                 is_hit = tp_hit or sl_hit
                 if is_hit:
                     if tp_hit and sl_hit:
-                        is_tp = pine_abs(o[i] - tpp) < pine_abs(o[i] - slp)
+                        is_tp = pine_abs(o[i] - h[i]) <= pine_abs(o[i] - l[i])
                     else:
                         is_tp = tp_hit
                     exit_p = tpp if is_tp else slp
