@@ -66,10 +66,12 @@ if 'JIT_COMPILED_V5' not in globals():
     def n_ema(s, l):
         res = np.full(len(s), np.nan)
         alpha = 2.0 / (l + 1.0)
+        sma_arr = n_sma(s, l)
         for i in range(len(s)):
             if np.isnan(s[i]): continue
             if i == 0 or np.isnan(res[i-1]):
-                res[i] = s[i]
+                if not np.isnan(sma_arr[i]):
+                    res[i] = sma_arr[i]
             else:
                 res[i] = alpha * s[i] + (1.0 - alpha) * res[i-1]
         return res
@@ -91,7 +93,7 @@ if 'JIT_COMPILED_V5' not in globals():
     @njit
     def n_wma(s, l):
         res = np.full(len(s), np.nan)
-        w_sum = (l * (l + 1)) / 2
+        w_sum = (l * (l + 1)) / 2.0
         for i in range(len(s)):
             if i < l - 1: continue
             dot_p = 0.0; valid = True
@@ -129,10 +131,9 @@ if 'JIT_COMPILED_V5' not in globals():
     def n_vwma(c_p, v_p, l):
         cv = c_p * v_p
         res_cv = n_sma(cv, l); res_v = n_sma(v_p, l)
-        mask = res_v != 0
         result = np.full(len(c_p), np.nan)
         for i in range(len(result)):
-            if mask[i] and not np.isnan(res_cv[i]):
+            if not np.isnan(res_v[i]) and res_v[i] != 0.0 and not np.isnan(res_cv[i]):
                 result[i] = res_cv[i] / res_v[i]
         return result
 
