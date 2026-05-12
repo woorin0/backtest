@@ -450,8 +450,7 @@ if 'JIT_ORDER_V5' not in globals():
                 if tp_t == 0:   tpp = tf
                 elif tp_t == 1: tpp = ta_v
                 else:
-                    if np.isnan(tf): tpp = ta_v
-                    elif np.isnan(ta_v): tpp = tf
+                    if np.isnan(tf) or np.isnan(ta_v): tpp = np.nan
                     else: tpp = max(tf, ta_v)
 
                 # SL: Pine 'both' = math.max(Fixed_SL, ATR_SL)
@@ -460,8 +459,7 @@ if 'JIT_ORDER_V5' not in globals():
                 if sl_t == 0:   slp = sf
                 elif sl_t == 1: slp = sa
                 else:
-                    if np.isnan(sf): slp = sa
-                    elif np.isnan(sa): slp = sf
+                    if np.isnan(sf) or np.isnan(sa): slp = np.nan
                     else: slp = max(sf, sa)
                 if not np.isnan(slp): slp = max(slp, tick)
 
