@@ -1,7 +1,7 @@
 import vectorbt as vbt
 import pandas as pd
 import numpy as np
-from numba import njit
+from numba import njit, literal_unroll
 
 # ==========================================
 # [Dual Long - Pine Script 100% Parity v5.0]
@@ -34,21 +34,21 @@ if 'JIT_COMPILED_V5' not in globals():
     @njit
     def pine_min(*args):
         res = np.nan
-        for a in args:
+        for a in literal_unroll(args):
             if np.isnan(res):
-                res = a
+                res = float(a)
             elif not np.isnan(a):
-                res = a if a < res else res
+                res = float(a) if a < res else res
         return res
 
     @njit
     def pine_max(*args):
         res = np.nan
-        for a in args:
+        for a in literal_unroll(args):
             if np.isnan(res):
-                res = a
+                res = float(a)
             elif not np.isnan(a):
-                res = a if a > res else res
+                res = float(a) if a > res else res
         return res
 
     @njit
