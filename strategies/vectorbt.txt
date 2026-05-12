@@ -95,7 +95,7 @@ if 'JIT_COMPILED_V5' not in globals():
         return res
 
     @njit
-    def n_stdev(s, l, biased=True):
+    def calc_stdev_pine_nb(s, l, biased=True):
         mean_arr = n_sma(s, l)
         res = np.full(len(s), np.nan)
         for i in range(len(s)):
@@ -108,7 +108,7 @@ if 'JIT_COMPILED_V5' not in globals():
                 val = s[i - j]
                 if not np.isnan(val):
                     diff = val - mean
-                    if np.abs(diff) <= 1e-10:
+                    if abs(diff) <= 1e-10:
                         diff = 0.0
                     sum_sq += diff ** 2
                     count += 1
@@ -306,7 +306,7 @@ else:
 
 # --- Bollinger Bands ---
 bb_mid = calc_ma(df_htf['Close'], vol_htf, bb_len, bb_ma_type)
-bb_std = n_stdev(df_htf['Close'].values, bb_len, biased=True)
+bb_std = calc_stdev_pine_nb(df_htf['Close'].values, bb_len, biased=True)
 bb_mid_safe = np.where(np.isnan(bb_mid), 0.0, bb_mid)
 bb_dev = np.fmax(np.nan_to_num(bb_std * bb_dev_in, nan=0.0), bb_mid_safe * bb_min_w / 100.0)
 bb_u   = bb_mid + bb_dev
