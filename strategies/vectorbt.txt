@@ -236,7 +236,7 @@ def ta_crossunder(source1, source2):
     Pine Script ta.crossunder(source1, source2) 완벽 재현:
     이전 봉에서 source1이 source2보다 크거나 같고, 현재 봉에서 source1이 source2보다 작을 때 참.
     """
-    s1_prev = pd.Series(source1).shift(1).values
+    s1_prev = source1 if isinstance(source1, (int, float)) else pd.Series(source1).shift(1).values
     s2_prev = source2 if isinstance(source2, (int, float)) else pd.Series(source2).shift(1).values
     return (s1_prev >= s2_prev) & (source1 < source2)
 
@@ -245,7 +245,7 @@ def ta_crossover(source1, source2):
     Pine Script ta.crossover(source1, source2) 완벽 재현:
     이전 봉에서 source1이 source2보다 작거나 같고, 현재 봉에서 source1이 source2보다 클 때 참.
     """
-    s1_prev = pd.Series(source1).shift(1).values
+    s1_prev = source1 if isinstance(source1, (int, float)) else pd.Series(source1).shift(1).values
     s2_prev = source2 if isinstance(source2, (int, float)) else pd.Series(source2).shift(1).values
     return (s1_prev <= s2_prev) & (source1 > source2)
 
