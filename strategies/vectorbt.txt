@@ -10,6 +10,39 @@ from numba import njit
 # [메모리 누수 방지] Numba JIT 컴파일 결과 전역 캐싱
 if 'JIT_COMPILED_V5' not in globals():
     @njit
+    def pine_pow(base, exponent):
+        if np.isnan(base) or np.isnan(exponent): return np.nan
+        if base < 0 and exponent % 1 != 0: return np.nan
+        return base ** exponent
+
+    @njit
+    def pine_round(number):
+        if np.isnan(number): return np.nan
+        return np.floor(number + 0.5)
+
+    @njit
+    def pine_ceil(number):
+        if np.isnan(number): return np.nan
+        return np.ceil(number)
+
+    @njit
+    def pine_abs(number):
+        if np.isnan(number): return np.nan
+        return abs(number)
+
+    @njit
+    def pine_min(a, b):
+        if np.isnan(a): return b
+        if np.isnan(b): return a
+        return a if a < b else b
+
+    @njit
+    def pine_max(a, b):
+        if np.isnan(a): return b
+        if np.isnan(b): return a
+        return a if a > b else b
+
+    @njit
     def n_sma(s, l):
         res = np.full(len(s), np.nan)
         for i in range(len(s)):
@@ -105,8 +138,8 @@ if 'JIT_COMPILED_V5' not in globals():
             lsp_prev = ls if np.isnan(lsp_prev_val) else lsp_prev_val
             ssp_prev = ss if np.isnan(ssp_prev_val) else ssp_prev_val
 
-            lsp = max(ls, lsp_prev) if ma > lsp_prev else ls
-            ssp = min(ss, ssp_prev) if ma < ssp_prev else ss
+            lsp = pine_max(ls, lsp_prev) if ma > lsp_prev else ls
+            ssp = pine_min(ss, ssp_prev) if ma < ssp_prev else ss
 
             dv = dir_val
             if dv == -1 and ma > ssp_prev:
@@ -138,9 +171,9 @@ if 'JIT_ATR_PINE' not in globals():
             tr[0] = h[0] - l[0]
         for i in range(1, n):
             hl  = h[i] - l[i]
-            hpc = abs(h[i] - c[i - 1])
-            lpc = abs(l[i] - c[i - 1])
-            tr[i] = max(hl, hpc, lpc)
+            hpc = pine_abs(h[i] - c[i - 1])
+            lpc = pine_abs(l[i] - c[i - 1])
+            tr[i] = pine_max(hl, pine_max(hpc, lpc))
         # ta.rma: alpha = 1/length, seed with SMA over length
         atr = np.full(n, np.nan)
         alpha = 1.0 / length
@@ -254,7 +287,7 @@ else:
 bb_mid = calc_ma(df_htf['Close'], vol_htf, bb_len, bb_ma_type)
 bb_std = df_htf['Close'].rolling(bb_len).std(ddof=0).values
 bb_mid_safe = np.where(np.isnan(bb_mid), 0.0, bb_mid)
-bb_dev = np.maximum(np.nan_to_num(bb_std * bb_dev_in, nan=0.0), bb_mid_safe * bb_min_w / 100.0)
+bb_dev = np.fmax(np.nan_to_num(bb_std * bb_dev_in, nan=0.0), bb_mid_safe * bb_min_w / 100.0)
 bb_u   = bb_mid + bb_dev
 
 # --- H/L OTT ---
@@ -273,12 +306,12 @@ hott_s = np.nan_to_num(hott_s, nan=0.0)
 if hl_price_type == 'BB': hl_p = bb_u.copy()
 elif hl_price_type == 'H/L OTT': hl_p = hott_s.copy()
 else:
-    # math.max()는 하나라도 na이면 na를 반환해야 하므로 np.fmax가 아닌 np.maximum 사용
-    hl_p = np.maximum(hott_s, bb_u)
+    # Pine Script math.max() ignores na, so we use np.fmax
+    hl_p = np.fmax(hott_s, bb_u)
 
 # --- LL 트리거 가격 ---
-safe_epsilon = 1.0 / (10 ** ex_dec)
-safe_close = np.maximum(np.nan_to_num(c_np_htf, nan=0.0), safe_epsilon)
+safe_epsilon = 1.0 / (pine_pow(10.0, ex_dec))
+safe_close = np.fmax(np.nan_to_num(c_np_htf, nan=0.0), safe_epsilon)
 hl_ratio   = (h_np_htf - l_np_htf) / safe_close
 ma1_arr    = n_sma(hl_ratio, ma1_len)
 
@@ -364,7 +397,7 @@ if 'JIT_ORDER_V5' not in globals():
 
         pos = ctx.position_now
         cash = ctx.cash_now
-        p10  = 10.0 ** dec
+        p10  = pine_pow(10.0, dec)
         tick = 1.0 / p10
         slip = slip_ticks * tick
 
@@ -376,34 +409,34 @@ if 'JIT_ORDER_V5' not in globals():
             llp_cur = llp_t[i]
             cur_htf = htf_id_t[i]
 
-            cash_safe = max(cash, 0.0)
+            cash_safe = pine_max(cash, 0.0)
             prev_cl = cl[i-1]
             if np.isnan(prev_cl): prev_cl = 0.0
-            cl_now = max(prev_cl, tick)
+            cl_now = pine_max(prev_cl, tick)
 
             # HL 진입
             if not np.isnan(hlp_cur) and hlp_cur > 0 and i > hl_min_bar:
                 if o_m_h == 0:  # limits (stop order)
-                    safe_stop = max(hlp_cur, tick)
+                    safe_stop = pine_max(hlp_cur, tick)
                     if h[i] >= safe_stop and cur_htf != last_act_a[0]:
-                        ep = max(o[i], safe_stop) + slip
+                        ep = pine_max(o[i], safe_stop) + slip
                         base_qty = cash_safe / cl_now
-                        qty = np.floor(base_qty * p10 + 0.5) / p10
+                        qty = pine_round(base_qty * p10) / p10
                         if qty > 0:
                             id_a[col] = 1; price_a[col] = ep; size_a[col] = qty
                             base_qty_pine = cash_safe / cl_now
-                            inst_qty_a[col] = np.ceil(base_qty_pine / inst_num * p10) / p10
+                            inst_qty_a[col] = pine_ceil(base_qty_pine / inst_num * p10) / p10
                             last_act_a[0] = cur_htf
                             return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=0, fees=0.0008)
                 else:  # close 모드 (HTF 종가 시그널)
                     if hl_sig_t[i] > 0 and hl_sig_t[i] != last_act_a[0]:
                         ep = o[i] + slip
                         base_qty = cash_safe / cl_now
-                        qty = np.floor(base_qty * p10 + 0.5) / p10
+                        qty = pine_round(base_qty * p10) / p10
                         if qty > 0:
                             id_a[col] = 1; price_a[col] = ep; size_a[col] = qty
                             base_qty_pine = cash_safe / cl_now
-                            inst_qty_a[col] = np.ceil(base_qty_pine / inst_num * p10) / p10
+                            inst_qty_a[col] = pine_ceil(base_qty_pine / inst_num * p10) / p10
                             last_act_a[0] = hl_sig_t[i]
                             return vbt.portfolio.nb.order_nb(size=qty, price=ep, size_type=0, fees=0.0008)
 
@@ -411,9 +444,9 @@ if 'JIT_ORDER_V5' not in globals():
             if not np.isnan(llp_cur) and llp_cur > 0 and i > ll_min_bar:
                 if o_m_l == 0:  # limits (Pine: limit)
                     if l[i] <= llp_cur and cur_htf != last_act_a[1] and llp_cur > 0:
-                        ep = min(o[i], llp_cur) + slip # Limit order slippage parity
+                        ep = pine_min(o[i], llp_cur) + slip # Limit order slippage parity
                         base_qty = cash_safe / cl_now
-                        qty = np.floor(base_qty * p10 + 0.5) / p10
+                        qty = pine_round(base_qty * p10) / p10
                         if qty > 0:
                             id_a[col] = 2; price_a[col] = ep; size_a[col] = qty
                             last_act_a[1] = cur_htf
@@ -423,7 +456,7 @@ if 'JIT_ORDER_V5' not in globals():
                         ep = o[i] + slip # Long entry close: ADD slip
                         if ep <= 0: ep = tick
                         base_qty = cash_safe / cl_now
-                        qty = np.floor(base_qty * p10 + 0.5) / p10
+                        qty = pine_round(base_qty * p10) / p10
                         if qty > 0:
                             id_a[col] = 2; price_a[col] = ep; size_a[col] = qty
                             last_act_a[1] = ll_sig_t[i]
@@ -452,7 +485,7 @@ if 'JIT_ORDER_V5' not in globals():
                 else:
                     if np.isnan(tf): tpp = ta_v
                     elif np.isnan(ta_v): tpp = tf
-                    else: tpp = max(tf, ta_v)
+                    else: tpp = pine_max(tf, ta_v)
 
                 # SL: Pine 'both' = math.max(Fixed_SL, ATR_SL)
                 sf = ep * (1.0 - slh)
@@ -462,15 +495,15 @@ if 'JIT_ORDER_V5' not in globals():
                 else:
                     if np.isnan(sf): slp = sa
                     elif np.isnan(sa): slp = sf
-                    else: slp = max(sf, sa)
-                if not np.isnan(slp): slp = max(slp, tick)
+                    else: slp = pine_max(sf, sa)
+                if not np.isnan(slp): slp = pine_max(slp, tick)
 
                 exit_mode = e_m_h
 
             else:  # LL 포지션
                 tpp = ep * (1.0 + tpl)
                 slp = ep * (1.0 - sll)
-                if not np.isnan(slp): slp = max(slp, tick)
+                if not np.isnan(slp): slp = pine_max(slp, tick)
                 exit_mode = e_m_l
 
             # nan 처리 (Pine Script의 na)
@@ -488,7 +521,7 @@ if 'JIT_ORDER_V5' not in globals():
                 is_hit = tp_hit or sl_hit
                 if is_hit:
                     if tp_hit and sl_hit:
-                        is_tp = abs(o[i] - tpp) < abs(o[i] - slp)
+                        is_tp = pine_abs(o[i] - tpp) < pine_abs(o[i] - slp)
                     else:
                         is_tp = tp_hit
                     exit_p = tpp if is_tp else slp
@@ -498,9 +531,9 @@ if 'JIT_ORDER_V5' not in globals():
                     elif not is_tp and o[i] <= slp:
                         exit_p = o[i] - slip # Gap fill on stop loss gets slippage in Pine
                     elif not is_tp:
-                        exit_p = max(exit_p - slip, tick) # Normal stop loss gets slippage
+                        exit_p = pine_max(exit_p - slip, tick) # Normal stop loss gets slippage
                     else:
-                        exit_p = max(exit_p, tick) # Normal TP no slippage
+                        exit_p = pine_max(exit_p, tick) # Normal TP no slippage
             else:               # close 모드: 종가로 체크 (barstate.isconfirmed)
                 is_hit = False
                 if is_new_htf_bar:
@@ -522,7 +555,7 @@ if 'JIT_ORDER_V5' not in globals():
                     else:
                         inst_qty = inst_qty_a[col]
                         if inst_qty > 0:
-                            exit_qty = min(inst_qty, pos)
+                            exit_qty = pine_min(inst_qty, pos)
 
                         if pos <= exit_qty:
                             inst_qty_a[col] = 0.0
