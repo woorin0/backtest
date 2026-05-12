@@ -262,6 +262,9 @@ def run_optuna_worker(self, config: WorkerConfig):
                     
                     return ret_val
                 else:
+                    if status_redis.get(f"cancel:{study_name}") == "1":
+                        raise optuna.TrialPruned()
+
                     # 🚨 에러 디버깅을 위해 로컬 파일에 로그 기록
                     with open("debug_error.log", "a", encoding="utf-8") as f:
                         f.write(f"TRIAL {trial.number} FAILED - RES: {str(res)}\n")
@@ -271,6 +274,9 @@ def run_optuna_worker(self, config: WorkerConfig):
                         error_notified = True
                     raise optuna.TrialPruned()
             except Exception as e:
+                if status_redis.get(f"cancel:{study_name}") == "1":
+                    raise optuna.TrialPruned()
+
                 with open("debug_error.log", "a", encoding="utf-8") as f:
                     f.write(f"TRIAL {trial.number} EXCEPTION - {str(e)}\n{traceback.format_exc()}\n")
                 traceback.print_exc()
@@ -280,6 +286,9 @@ def run_optuna_worker(self, config: WorkerConfig):
         status_redis.set(f"worker_status_{worker_id}", "완료됨", ex=300)
         return {"status": "worker_done"}
     except Exception as e:
+        if status_redis.get(f"cancel:{study_name}") == "1":
+            return {"status": "worker_canceled"}
+
         error_msg = str(e)
         # 🚨 [V7.3] 타임아웃 및 OOM 워커 강제 중단 발생 시 디스코드 즉시 알람
         try:
