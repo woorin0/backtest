@@ -153,8 +153,16 @@ st.divider()
 
 # 📜 히스토리
 st.markdown("### 📜 리포트 아카이브 (최신 10개)")
-res_files = sorted(glob.glob("results/*.xlsx"), key=os.path.getmtime, reverse=True)
-for i, fp in enumerate(res_files[:10]):
+res_files = []
+if os.path.exists("results"):
+    with os.scandir("results") as entries:
+        res_files = sorted(
+            [(e.path, e.stat().st_mtime) for e in entries if e.is_file() and e.name.endswith(".xlsx")],
+            key=lambda x: x[1],
+            reverse=True
+        )
+
+for i, (fp, _) in enumerate(res_files[:10]):
     fn = os.path.basename(fp)
     with st.container():
         cols = st.columns([4, 1])
