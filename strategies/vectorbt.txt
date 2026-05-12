@@ -17,9 +17,12 @@ if 'JIT_COMPILED_V5' not in globals():
         return base ** exponent
 
     @njit
-    def pine_round(number):
+    def pine_round(number, precision=0):
         if np.isnan(number): return np.nan
-        return np.floor(number + 0.5)
+        if precision == 0:
+            return np.floor(number + 0.5)
+        factor = 10.0 ** precision
+        return np.floor(number * factor + 0.5) / factor
 
     @njit
     def pine_ceil(number):
@@ -29,26 +32,26 @@ if 'JIT_COMPILED_V5' not in globals():
     @njit
     def pine_abs(number):
         if np.isnan(number): return np.nan
-        return abs(number)
+        return np.abs(number)
 
     @njit
-    def pine_min(*args):
+    def pine_min(a, b, c=np.nan, d=np.nan, e=np.nan):
         res = np.nan
-        for a in literal_unroll(args):
+        for val in (float(a), float(b), float(c), float(d), float(e)):
             if np.isnan(res):
-                res = float(a)
-            elif not np.isnan(a):
-                res = float(a) if a < res else res
+                res = val
+            elif not np.isnan(val):
+                res = val if val < res else res
         return res
 
     @njit
-    def pine_max(*args):
+    def pine_max(a, b, c=np.nan, d=np.nan, e=np.nan):
         res = np.nan
-        for a in literal_unroll(args):
+        for val in (float(a), float(b), float(c), float(d), float(e)):
             if np.isnan(res):
-                res = float(a)
-            elif not np.isnan(a):
-                res = float(a) if a > res else res
+                res = val
+            elif not np.isnan(val):
+                res = val if val > res else res
         return res
 
     @njit
