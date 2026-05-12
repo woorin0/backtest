@@ -31,16 +31,24 @@ if 'JIT_COMPILED_V5' not in globals():
         return abs(number)
 
     @njit
-    def pine_min(a, b):
-        if np.isnan(a): return b
-        if np.isnan(b): return a
-        return a if a < b else b
+    def pine_min(*args):
+        res = np.nan
+        for a in args:
+            if np.isnan(res):
+                res = a
+            elif not np.isnan(a):
+                res = a if a < res else res
+        return res
 
     @njit
-    def pine_max(a, b):
-        if np.isnan(a): return b
-        if np.isnan(b): return a
-        return a if a > b else b
+    def pine_max(*args):
+        res = np.nan
+        for a in args:
+            if np.isnan(res):
+                res = a
+            elif not np.isnan(a):
+                res = a if a > res else res
+        return res
 
     @njit
     def n_sma(s, l):
@@ -185,7 +193,7 @@ if 'JIT_ATR_PINE' not in globals():
             hl  = h[i] - l[i]
             hpc = pine_abs(h[i] - c[i - 1])
             lpc = pine_abs(l[i] - c[i - 1])
-            tr[i] = pine_max(hl, pine_max(hpc, lpc))
+            tr[i] = pine_max(hl, hpc, lpc)
         # ta.rma: alpha = 1/length, seed with SMA over length
         atr = np.full(n, np.nan)
         alpha = 1.0 / length
@@ -201,9 +209,9 @@ if 'JIT_ATR_PINE' not in globals():
                     last = sum_val / length
                     atr[i] = last
             else:
-                hpc = abs(h[i] - c[i - 1])
-                lpc = abs(l[i] - c[i - 1])
-                tr[i] = max(hl, hpc, lpc)
+                hpc = pine_abs(h[i] - c[i - 1])
+                lpc = pine_abs(l[i] - c[i - 1])
+                tr[i] = pine_max(hl, hpc, lpc)
 
         # ta.rma: alpha = 1/length, seed with SMA over length
         return n_rma(tr, length)
