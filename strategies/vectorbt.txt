@@ -13,6 +13,7 @@ if 'JIT_COMPILED_V5' not in globals():
     def pine_pow(base, exponent):
         if np.isnan(base) or np.isnan(exponent): return np.nan
         if base < 0 and exponent % 1 != 0: return np.nan
+        if base == 0 and exponent < 0: return np.nan
         return base ** exponent
 
     @njit
