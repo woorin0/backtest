@@ -325,7 +325,7 @@ bb_u   = bb_mid + bb_dev
 
 # --- H/L OTT ---
 h_src_ser = df_htf['High'] if hott_h_src == 'High' else df_htf['Close']
-mavg_h_pre = h_src_ser.rolling(hott_h_len).max()
+mavg_h_pre = h_src_ser.rolling(hott_h_len, min_periods=1).max()
 mavg_h_np  = calc_ma(mavg_h_pre, vol_htf, hott_len, hott_ma_type)
 hott_raw   = calc_hott_nb(mavg_h_np, hott_per)
 
