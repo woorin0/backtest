@@ -575,7 +575,7 @@ if 'JIT_ORDER_V5' not in globals():
             # --- TR MA 크로스언더 청산 ---
             if use_tr and cur_state == 1:
                 if tr_sig_t[i] > 0 and tr_sig_t[i] != last_act_a[2]:
-                    exit_p = o[i] - slip
+                    exit_p = pine_max(o[i] - slip, tick)
                     last_act_a[2] = tr_sig_t[i]
                     inst_qty_a[col] = 0.0
                     return vbt.portfolio.nb.order_nb(size=-pos, price=exit_p, size_type=0, fees=0.0008)
@@ -634,7 +634,7 @@ if 'JIT_ORDER_V5' not in globals():
                     if is_tp and o[i] >= tpp:
                         exit_p = o[i]
                     elif not is_tp and o[i] <= slp:
-                        exit_p = o[i] - slip # Gap fill on stop loss gets slippage in Pine
+                        exit_p = pine_max(o[i] - slip, tick) # Gap fill on stop loss gets slippage in Pine
                     elif not is_tp:
                         exit_p = pine_max(exit_p - slip, tick) # Normal stop loss gets slippage
                     else:
@@ -647,7 +647,7 @@ if 'JIT_ORDER_V5' not in globals():
                     if tp_hit or sl_hit:
                         is_hit = True
                         is_tp = tp_hit
-                        exit_p = o[i] - slip
+                        exit_p = pine_max(o[i] - slip, tick)
 
             if is_hit:
 
