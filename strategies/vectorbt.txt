@@ -146,8 +146,11 @@ if 'JIT_COMPILED_V5' not in globals():
                     sum_sq += diff ** 2
                     count += 1
             if count == l:
-                variance = sum_sq / l if biased else sum_sq / (l - 1)
-                res[i] = np.sqrt(variance)
+                if not biased and l == 1:
+                    res[i] = np.nan
+                else:
+                    variance = sum_sq / l if biased else sum_sq / (l - 1)
+                    res[i] = np.sqrt(variance)
         return res
 
     @njit
