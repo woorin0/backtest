@@ -472,7 +472,7 @@ if 'JIT_ORDER_V5' not in globals():
             return vbt.portfolio.nb.order_nothing_nb()
 
         pos = ctx.position_now
-        cash = ctx.cash_now
+        cash = ctx.cash_now + (pos * cl[i-1] if not np.isnan(cl[i-1]) else 0.0)
         p10  = pine_pow(10.0, dec)
         tick = 1.0 / p10
         slip = slip_ticks * tick
