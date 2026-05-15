@@ -4,7 +4,7 @@
 import dokang/POA/17
 
 //@version=6
-strategy('Dual Long(간소화)', overlay = true, default_qty_type = strategy.percent_of_equity, default_qty_value = 100, initial_capital = 400, pyramiding = 0, commission_value = 0.08, slippage = 3, use_bar_magnifier = true, margin_long = 0, margin_short = 0)
+strategy('Dual Long(간소화)', overlay = true, default_qty_type = strategy.percent_of_equity, default_qty_value = 100, initial_capital = 500000, pyramiding = 0, commission_value = 0.08, slippage = 3, use_bar_magnifier = true, margin_long = 0, margin_short = 0)
 
 // =========[ 공용 헬퍼 ]=========
 safe_epsilon = nz(syminfo.mintick, 0.000001)
