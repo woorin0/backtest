@@ -282,6 +282,19 @@ def ta_crossover(source1, source2):
     s2_prev = source2 if isinstance(source2, (int, float)) else pd.Series(source2).shift(1).values
     return (s1_prev <= s2_prev) & (source1 > source2)
 
+def ta_bb(source, length, mult):
+    """
+    Pine Script ta.bb(series, length, mult) 완벽 재현:
+    [basis, upper, lower] = ta.bb(...)
+    - basis = ta.sma(source, length)
+    - dev = mult * ta.stdev(source, length)
+    """
+    basis = n_sma(source, length)
+    dev = mult * calc_stdev_pine_nb(source, length, biased=True)
+    upper = basis + dev
+    lower = basis - dev
+    return basis, upper, lower
+
 # =========[ 데이터 로드 (MTF 대응) ]=========
 if 'data_htf' in globals() and 'data_ltf' in globals():
     df_htf = data_htf
